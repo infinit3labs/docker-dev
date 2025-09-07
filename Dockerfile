@@ -137,8 +137,8 @@ COPY --from=builder /etc/ld.so.conf.d/oracle.conf /etc/ld.so.conf.d/oracle.conf
 RUN set -eux; \
     groupadd -r devuser; \
     useradd -r -g devuser -m -s /bin/zsh devuser; \
-    mkdir -p /workspace /poetry-cache /pip-cache; \
-    chown -R devuser:devuser /workspace /poetry-cache /pip-cache; \
+    mkdir -p /workspace /home/devuser/.cache/pypoetry /home/devuser/.cache/pip; \
+    chown -R devuser:devuser /workspace /home/devuser/.cache; \
     ldconfig
 
 ARG POETRY_VERSION=1.8.4
@@ -149,8 +149,13 @@ WORKDIR /workspace
 ENV PATH=/opt/pyenv/shims:/opt/pyenv/bin:/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/devuser/.local/bin \
     PYTHONPATH=/workspace \
     LD_LIBRARY_PATH=/opt/oracle \
-    POETRY_CACHE_DIR=/poetry-cache \
-    PIP_CACHE_DIR=/pip-cache
+    POETRY_CACHE_DIR=/home/devuser/.cache/pypoetry \
+    PIP_CACHE_DIR=/home/devuser/.cache/pip \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=random \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=0
 
 # Ensure SSL certs are up to date (no sudo; run as root)
 USER root
@@ -165,7 +170,8 @@ USER devuser
 RUN pipx ensurepath \
     && pipx install "poetry==${POETRY_VERSION}" \
     && pipx install azure-cli \
-    && poetry config virtualenvs.in-project true \
+    && poetry config virtualenvs.in-project false \
+    && poetry config virtualenvs.path /home/devuser/.cache/pypoetry/virtualenvs \
     && poetry config virtualenvs.create true \
     && poetry config installer.parallel true
 
@@ -195,7 +201,9 @@ RUN set -eux; \
         fi
 
 # Copy entrypoint script with executable permissions set at build time
+# Copy runtime scripts with executable permissions set at build time
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chmod=0755 secure-clone.sh /usr/local/bin/secure-clone.sh
 
 # Healthcheck for basic Python availability
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
@@ -203,4 +211,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
 
 # Entrypoint ensures Poetry env setup; default command opens zsh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
-CMD ["/bin/zsh"]
+CMD ["/bin/zsh", "-l"]

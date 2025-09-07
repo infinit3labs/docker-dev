@@ -30,3 +30,6 @@ dist/
 .env
 .env.*
 secrets/
+
+# Local project data that shouldn't be sent to build context
+workspace/

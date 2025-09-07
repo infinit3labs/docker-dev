@@ -4,18 +4,20 @@ services:
     env_file:
       - .env
     environment:
-      - GIT_TOKEN_FILE=${GIT_TOKEN_FILE:-/run/secrets/git_token}
-      - GIT_REPO=${GIT_REPO:?Set in .env (format: owner/repo)}
-      - GIT_BRANCH=${GIT_BRANCH:-main}
-      - TARGET_DIR=${TARGET_DIR:-/workspace/repo}
+      - GIT_TOKEN_FILE=${GIT_TOKEN_FILE}
+      - GIT_URL=${GIT_URL}
+      - GIT_PROVIDER=${GIT_PROVIDER}
+      - GIT_HOST=${GIT_HOST}
+      - GIT_REPO=${GIT_REPO}
+      - GIT_BRANCH=${GIT_BRANCH}
+      - TARGET_DIR=${TARGET_DIR}
+      - GIT_USERNAME=${GIT_USERNAME}
     secrets:
       - git_token
     volumes:
       - ./workspace:/workspace:rw
-      - ./secure-clone.sh:/workspace/secure-clone.sh:ro
-      - ~/.gitconfig:/home/devuser/.gitconfig:ro
-      - ~/.ssh:/home/devuser/.ssh:ro
-    command: ["/bin/zsh"]
+    tty: true
+    stdin_open: true
 
 secrets:
   git_token:
