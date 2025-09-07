@@ -40,17 +40,49 @@ else
 fi
 
 BASE_DIR="${PROJECT_DIR:-/workspace}"
-if [[ -n "${TARGET_DIR:-}" ]]; then
-  if [[ "${TARGET_DIR}" = /* ]]; then
-    WORKSPACE_DIR="${TARGET_DIR}"
+
+# Pick a writable workspace directory, falling back to a 0777 tmp dir if needed
+resolve_path() {
+  local base="$1" child="$2"
+  if [[ "$child" = /* ]]; then
+    printf "%s\n" "$child"
   else
-    WORKSPACE_DIR="${BASE_DIR%/}/${TARGET_DIR}"
+    printf "%s/%s\n" "${base%/}" "$child"
   fi
-else
-  WORKSPACE_DIR="${BASE_DIR}"
+}
+
+declare -a CANDIDATES=()
+if [[ -n "${TARGET_DIR:-}" ]]; then
+  CANDIDATES+=("$(resolve_path "$BASE_DIR" "$TARGET_DIR")")
 fi
-mkdir -p "${WORKSPACE_DIR}"
-cd "${WORKSPACE_DIR}"
+# Always consider the base dir as a candidate
+CANDIDATES+=("$BASE_DIR")
+# Common fallbacks for writable locations inside containers
+CANDIDATES+=("/workspace" "/workspaces" "/home/${USER:-devuser}/workspace" "/tmp/workspace")
+
+WORKSPACE_DIR=""
+for dir in "${CANDIDATES[@]}"; do
+  [[ -z "$dir" ]] && continue
+  if mkdir -p "$dir" 2>/dev/null; then
+    # Verify we can write here
+    if tmpfile="$dir/.permtest.$$"; : >"$tmpfile" 2>/dev/null; then
+      rm -f "$tmpfile" || true
+      WORKSPACE_DIR="$dir"
+      # Try to relax permissions to avoid future write issues
+      chmod 0777 "$dir" 2>/dev/null || true
+      break
+    fi
+  fi
+done
+
+if [[ -z "$WORKSPACE_DIR" ]]; then
+  # Last-resort writable directory
+  WORKSPACE_DIR="/tmp/workspace-$$"
+  mkdir -p "$WORKSPACE_DIR"
+  chmod 0777 "$WORKSPACE_DIR" 2>/dev/null || true
+fi
+
+cd "$WORKSPACE_DIR"
 
 # Build repository URL if not provided
 REPO_URL="${GIT_URL:-}"
