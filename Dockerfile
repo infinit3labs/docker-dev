@@ -4,6 +4,10 @@
 # -------- Builder stage: toolchains and dependencies --------
 FROM ubuntu:24.04 AS builder
 
+# Enable multi-arch awareness (provided by BuildKit/Buildx)
+ARG TARGETPLATFORM
+ARG TARGETARCH
+
 ARG PYTHON_VERSION=3.12.3
 ARG SPARK_VERSION=4.0.0
 ARG NODE_MAJOR=22
@@ -75,7 +79,8 @@ RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openjdk-21-jdk-headless; \
     rm -rf /var/lib/apt/lists/*
-ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+# Map JAVA_HOME for the active architecture (amd64|arm64)
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-${TARGETARCH}
 ENV PATH=$JAVA_HOME/bin:$PATH
 
 # Apache Spark (verify checksum via official .sha512 file)
@@ -112,7 +117,11 @@ RUN pipx install azure-cli
 RUN --mount=type=cache,target=/download_cache,id=download_cache \
         set -eux; \
         cd /download_cache; \
-        ORA_ZIP="instantclient-basic-linux.x64-21.19.0.0.0dbru.zip"; \
+                case "${TARGETARCH}" in \
+                    amd64) ORA_ZIP="instantclient-basic-linux.x64-21.19.0.0.0dbru.zip";; \
+                    arm64) ORA_ZIP="instantclient-basic-linux.arm64-21.19.0.0.0dbru.zip";; \
+                    *) echo "Unsupported TARGETARCH: ${TARGETARCH}"; exit 1;; \
+                esac; \
         if [ -f "$ORA_ZIP" ]; then \
             echo "Using cached $ORA_ZIP"; \
         else \
@@ -127,6 +136,10 @@ ENV LD_LIBRARY_PATH=/opt/oracle
 
 # -------- Final stage: minimal runtime, non-root --------
 FROM ubuntu:24.04
+
+# Multi-arch awareness in final stage too (not strictly required but documented)
+ARG TARGETPLATFORM
+ARG TARGETARCH
 
 # Copy only what is needed from builder
 COPY --from=builder /opt /opt
@@ -156,6 +169,10 @@ ENV PATH=/opt/pyenv/shims:/opt/pyenv/bin:/opt/spark/bin:/usr/local/sbin:/usr/loc
     PYTHONHASHSEED=random \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=0
+
+# Provide JAVA_HOME at runtime per-arch for tools that rely on it
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-${TARGETARCH}
+ENV PATH=$JAVA_HOME/bin:$PATH
 
 # Ensure SSL certs are up to date (no sudo; run as root)
 USER root

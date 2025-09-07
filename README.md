@@ -69,6 +69,74 @@ Option C — let Compose handle the build:
 docker compose -f docker-compose.secure.yaml build
 ```
 
+Option D — multi-arch build (arm64 host producing amd64+arm64):
+
+```bash
+# Create and use a buildx builder once
+docker buildx create --use --name devbuilder || docker buildx use devbuilder
+
+# Build and push a manifest list to your registry (replace tag)
+docker buildx build \
+  --platform linux/amd64,linux/arm64 \
+  -t youruser/docker-dev-secure:latest \
+  -f Dockerfile \
+  --push .
+
+# Now any amd64 or arm64 host pulling your tag gets the right variant
+```
+
+## 2a) Multi-arch quick start (amd64 + arm64)
+
+Prerequisites:
+
+- Docker Buildx available (Docker Desktop: built-in. Linux: install buildx and enable binfmt emulation if cross-compiling):
+
+  ```bash
+  # Optional on Linux-only hosts (Desktop includes this)
+  docker run --privileged --rm tonistiigi/binfmt --install all
+  ```
+
+Steps:
+
+1) Choose a registry tag for your image (replace with your own):
+
+  - Example: `youruser/docker-dev-secure:latest` or `ghcr.io/yourorg/docker-dev-secure:latest`
+
+2) Build and push a multi-arch image (same as Option D above):
+
+  ```bash
+  docker buildx create --use --name devbuilder || docker buildx use devbuilder
+  docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    -t youruser/docker-dev-secure:latest \
+    -f Dockerfile \
+    --push .
+  ```
+
+3) Point Compose at that tag by setting `IMAGE_NAME` (via `.env` or environment):
+
+  ```bash
+  echo IMAGE_NAME=youruser/docker-dev-secure:latest > .env
+  ```
+
+4) Run on any host (amd64 or arm64):
+
+  ```bash
+  docker compose -f docker-compose.secure.yaml up -d
+  ```
+
+Notes and alternatives:
+
+- Local-only without pushing: Buildx cannot "--load" a multi-arch image into the local daemon in one shot. Use one of:
+  - Build and load a single-arch image for the current host: `docker buildx build --platform $(docker info --format '{{.Architecture}}' | sed 's/x86_64/amd64/') -t local/dev:latest -f Dockerfile --load .`
+  - Or export archives per-arch: `--output type=tar,dest=dev-amd64.tar` and load on each host with `docker load -i dev-amd64.tar`.
+  - Recommended for teams: push a multi-arch tag to a registry and use `IMAGE_NAME` to reference it.
+
+Troubleshooting:
+
+- "–load only supports a single platform": Use `--push` for multi-arch, or build per-arch with `--load`.
+- Platform mismatch warnings: either build/pull the correct arch, or set `platform:` under the compose service to force (`linux/amd64` or `linux/arm64`).
+
 ## 3) Configure runtime settings (optional)
 
 The Compose file sets a few environment variables for the `dev` service:
@@ -220,6 +288,22 @@ Best practices:
 - Slow `poetry install`: first run builds wheels; subsequent runs are faster. Consider caching with the same image or keeping the container running.
 - Fonts look off in the prompt: install a Nerd Font locally and set it in your terminal.
 - Azure CLI or Node require outbound network to fetch packages; ensure your host network allows it during build.
+ - Platform mismatch warning: If you see "The requested image's platform (linux/arm64) does not match the detected host platform (linux/amd64)", force x86_64 by adding to your compose service:
+
+   ```yaml
+   services:
+     dev:
+       platform: linux/amd64
+       build:
+         platform: linux/amd64
+   ```
+
+   Then rebuild and start: `docker compose -f docker-compose.secure.yaml up -d --build`. If you need both architectures, build a multi-arch image with Buildx: `docker buildx build --platform linux/amd64,linux/arm64 -t your/image:tag --push .` and reference it in compose.
+
+Notes for multi-arch:
+- The Dockerfile is now arch-aware (JAVA_HOME and Oracle Instant Client adapt to amd64/arm64).
+- For local-only use on one machine, you can omit Buildx and just `docker compose build` on that machine.
+- For sharing across archs, use Buildx to push a multi-arch tag and reference it via `IMAGE_NAME`.
 
 ## Reference: Compose service `dev`
 

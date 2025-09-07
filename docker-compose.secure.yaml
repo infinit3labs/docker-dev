@@ -1,6 +1,11 @@
 services:
   dev:
     image: ${IMAGE_NAME:?Set in .env}
+    # Build the image locally (multi-arch friendly Dockerfile). Optionally set
+    # 'platform: linux/amd64' or 'platform: linux/arm64' here to force a specific arch.
+    build:
+      context: .
+      dockerfile: Dockerfile
     env_file:
       - .env
     environment:
