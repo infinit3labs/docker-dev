@@ -4,7 +4,7 @@ set -euo pipefail
 # Build with BuildKit and scan image with Trivy
 # Requirements: Docker, Trivy (docker image used below)
 
-IMAGE_NAME=${IMAGE_NAME:-docker-dev-secure:latest}
+IMAGE_NAME=${IMAGE_NAME:-}
 DOCKERFILE=${DOCKERFILE:-Dockerfile}
 
 # Basic leak check for obvious secrets
@@ -17,7 +17,7 @@ fi
 export DOCKER_BUILDKIT=1
 
 echo "Building ${IMAGE_NAME} using ${DOCKERFILE}..."
-docker build --pull --no-cache -t "${IMAGE_NAME}" -f "${DOCKERFILE}" .
+docker build --pull --no-cache --platform linux/amd64 -t "${IMAGE_NAME}" -f "${DOCKERFILE}" .
 
 echo "Scanning image with Trivy (HIGH,CRITICAL)..."
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \

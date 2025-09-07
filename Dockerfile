@@ -1,12 +1,8 @@
 # syntax=docker/dockerfile:1.7
 #### Secure multi-stage build with pinned versions and least privilege
 
-# -------- Builder stage: toolchains and dependencies --------
+# -------- Builder stage: toolchains and dependencies (amd64 only) --------
 FROM ubuntu:24.04 AS builder
-
-# Enable multi-arch awareness (provided by BuildKit/Buildx)
-ARG TARGETPLATFORM
-ARG TARGETARCH
 
 ARG PYTHON_VERSION=3.12.3
 ARG SPARK_VERSION=4.0.0
@@ -74,13 +70,13 @@ RUN set -eux; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs; \
     rm -rf /var/lib/apt/lists/*
 
-# OpenJDK 21 (headless)
+# OpenJDK 21 (headless) - amd64
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openjdk-21-jdk-headless; \
     rm -rf /var/lib/apt/lists/*
-# Map JAVA_HOME for the active architecture (amd64|arm64)
-ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-${TARGETARCH}
+# Map JAVA_HOME for amd64
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PATH=$JAVA_HOME/bin:$PATH
 
 # Apache Spark (verify checksum via official .sha512 file)
@@ -113,21 +109,22 @@ RUN pipx install "poetry==${POETRY_VERSION}";
 # This keeps the builder image lean and avoids "held broken packages" from apt.
 RUN pipx install azure-cli
 
-# Oracle Instant Client (verify) and configure loader
+# Oracle Instant Client (amd64/x64) and configure loader
+# Notes:
+# - Pinned version and directory IDs for reproducibility.
+ARG ORACLE_VERSION=21.19.0.0.0dbru
+ARG ORACLE_DIR_ID=2119000
 RUN --mount=type=cache,target=/download_cache,id=download_cache \
         set -eux; \
         cd /download_cache; \
-                case "${TARGETARCH}" in \
-                    amd64) ORA_ZIP="instantclient-basic-linux.x64-21.19.0.0.0dbru.zip";; \
-                    arm64) ORA_ZIP="instantclient-basic-linux.arm64-21.19.0.0.0dbru.zip";; \
-                    *) echo "Unsupported TARGETARCH: ${TARGETARCH}"; exit 1;; \
-                esac; \
-        if [ -f "$ORA_ZIP" ]; then \
-            echo "Using cached $ORA_ZIP"; \
+        ORA_ZIP="instantclient-basic-linux.x64-${ORACLE_VERSION}.zip"; \
+        ORA_URL="https://download.oracle.com/otn_software/linux/instantclient/${ORACLE_DIR_ID}/${ORA_ZIP}"; \
+        if [ -f "${ORA_ZIP}" ]; then \
+            echo "Using cached ${ORA_ZIP}"; \
         else \
-            wget -q "https://download.oracle.com/otn_software/linux/instantclient/2119000/$ORA_ZIP"; \
+            wget -q "${ORA_URL}"; \
         fi; \
-        unzip -q "$ORA_ZIP" -d /opt; \
+        unzip -q "${ORA_ZIP}" -d /opt; \
         mv /opt/instantclient_21_19 /opt/oracle; \
         echo "/opt/oracle" > /etc/ld.so.conf.d/oracle.conf; \
         ldconfig
@@ -136,10 +133,6 @@ ENV LD_LIBRARY_PATH=/opt/oracle
 
 # -------- Final stage: minimal runtime, non-root --------
 FROM ubuntu:24.04
-
-# Multi-arch awareness in final stage too (not strictly required but documented)
-ARG TARGETPLATFORM
-ARG TARGETARCH
 
 # Copy only what is needed from builder
 COPY --from=builder /opt /opt
@@ -170,8 +163,8 @@ ENV PATH=/opt/pyenv/shims:/opt/pyenv/bin:/opt/spark/bin:/usr/local/sbin:/usr/loc
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=0
 
-# Provide JAVA_HOME at runtime per-arch for tools that rely on it
-ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-${TARGETARCH}
+# Provide JAVA_HOME at runtime for amd64
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PATH=$JAVA_HOME/bin:$PATH
 
 # Ensure SSL certs are up to date (no sudo; run as root)

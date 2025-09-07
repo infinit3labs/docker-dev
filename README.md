@@ -60,7 +60,7 @@ chmod +x build-secure.sh
 Option B — build directly with Docker:
 
 ```bash
-DOCKER_BUILDKIT=1 docker build -t docker-dev-secure:latest -f Dockerfile .
+DOCKER_BUILDKIT=1 docker build -t ${IMAGE_NAME:-} -f Dockerfile .
 ```
 
 Option C — let Compose handle the build:
@@ -116,7 +116,7 @@ Steps:
 3) Point Compose at that tag by setting `IMAGE_NAME` (via `.env` or environment):
 
   ```bash
-  echo IMAGE_NAME=youruser/docker-dev-secure:latest > .env
+  echo IMAGE_NAME="${IMAGE_NAME:-}" > .env
   ```
 
 4) Run on any host (amd64 or arm64):
@@ -246,22 +246,21 @@ Other common methods:
 - File backup (local):
 
   ```bash
-  docker save docker-dev-secure:latest > ./backups/dev-env-$(date +%Y%m%d).tar
+  docker save ${IMAGE_NAME:-} > ./backups/dev-env-$(date +%Y%m%d).tar
   docker load < ./backups/dev-env-YYYYMMDD.tar
   ```
 
 - Docker Hub (sharing):
 
   ```bash
-  docker tag docker-dev-secure:latest youruser/dev-env:latest
-  docker push youruser/dev-env:latest
-  docker pull youruser/dev-env:latest
+  docker push ${IMAGE_NAME:-}
+  docker pull ${IMAGE_NAME:-}
   ```
 
 - Private registry:
 
   ```bash
-  docker tag docker-dev-secure:latest registry.example.com/dev-env:latest
+  docker tag ${IMAGE_NAME:-} registry.example.com/dev-env:latest
   docker push registry.example.com/dev-env:latest
   docker pull registry.example.com/dev-env:latest
   ```
@@ -301,7 +300,7 @@ Best practices:
    Then rebuild and start: `docker compose -f docker-compose.secure.yaml up -d --build`. If you need both architectures, build a multi-arch image with Buildx: `docker buildx build --platform linux/amd64,linux/arm64 -t your/image:tag --push .` and reference it in compose.
 
 Notes for multi-arch:
-- The Dockerfile is now arch-aware (JAVA_HOME and Oracle Instant Client adapt to amd64/arm64).
+- The Dockerfile is now fixed to amd64 (JAVA_HOME and Oracle Instant Client pinned to x64).
 - For local-only use on one machine, you can omit Buildx and just `docker compose build` on that machine.
 - For sharing across archs, use Buildx to push a multi-arch tag and reference it via `IMAGE_NAME`.
 
