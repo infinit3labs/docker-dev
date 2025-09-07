@@ -18,12 +18,14 @@ set -euo pipefail
 #   GIT_TOKEN_FILE=/run/secrets/git_token (preferred) or GIT_TOKEN=<pat>
 #   GIT_USERNAME=x-access-token (GitHub) | azdo (Azure DevOps)
 #   GIT_HOST=github.com|dev.azure.com (overrides host detection when building from GIT_REPO)
-#   PROJECT_DIR=/workspace  TARGET_DIR=/workspace/repo
+#   PROJECT_DIR=/workspace  (repos will be under $PROJECT_DIR/repos/<name>)
+#   GIT_REPOS="owner/repo1,owner/repo2 https://dev.azure.com/org/project/_git/repo3" (optional multi-repo)
 
-if [[ -z "${GIT_URL:-}" && -z "${GIT_REPO:-}" ]]; then
-  echo "Error: set either GIT_URL (full https URL) or GIT_REPO (slug)" >&2
-  echo "  - GitHub slug: owner/repo" >&2
-  echo "  - Azure DevOps slug with GIT_PROVIDER=azure: org/project/repo or org/project/_git/repo" >&2
+if [[ -z "${GIT_URL:-}" && -z "${GIT_REPO:-}" && -z "${GIT_REPOS:-}" ]]; then
+  echo "Error: set one of GIT_URL, GIT_REPO, or GIT_REPOS (list)" >&2
+  echo "  - GIT_REPO example (GitHub): owner/repo" >&2
+  echo "  - GIT_REPO example (Azure with GIT_PROVIDER=azure): org/project/repo or org/project/_git/repo" >&2
+  echo "  - GIT_REPOS examples: 'owner/a,owner/b' or 'https://dev.azure.com/org/project/_git/repo'" >&2
   exit 1
 fi
 
@@ -40,78 +42,74 @@ else
 fi
 
 BASE_DIR="${PROJECT_DIR:-/workspace}"
+REPOS_ROOT="${REPOS_ROOT:-${BASE_DIR%/}/repos}"
 
-# Pick a writable workspace directory, falling back to a 0777 tmp dir if needed
-resolve_path() {
-  local base="$1" child="$2"
-  if [[ "$child" = /* ]]; then
-    printf "%s\n" "$child"
+# Ensure the repos root exists and is writable (should be a named volume mounted at /workspace)
+mkdir -p "$REPOS_ROOT"
+if ! tmpfile="$REPOS_ROOT/.permtest.$$"; : >"$tmpfile" 2>/dev/null; then
+  echo "Error: '$REPOS_ROOT' is not writable. Ensure a Docker named volume is mounted at $REPOS_ROOT with permissions for the runtime user." >&2
+  exit 1
+fi
+rm -f "$tmpfile" || true
+
+cd "$REPOS_ROOT"
+
+build_url_from_slug() {
+  local slug="$1" provider_lc host
+  provider_lc="${GIT_PROVIDER:-}"
+  provider_lc="${provider_lc,,}"
+  host="${GIT_HOST:-}"
+  if [[ -z "$host" ]]; then
+    if [[ "$provider_lc" == "azure" || "$provider_lc" == "ado" || "$provider_lc" == "azure-devops" ]]; then
+      host="dev.azure.com"
+    else
+      host="github.com"
+    fi
+  fi
+  if [[ "$host" == "github.com" && -z "$provider_lc" ]]; then
+    printf "https://github.com/%s.git\n" "$slug"
+    return 0
+  fi
+  local repo_path="$slug"
+  if [[ "$repo_path" != *"/_git/"* ]]; then
+    IFS='/' read -r _org _project _repo rest <<<"$repo_path"
+    if [[ -n "$_org" && -n "$_project" && -n "$_repo" && -z "${rest:-}" ]]; then
+      repo_path="${_org}/${_project}/_git/${_repo}"
+    fi
+  fi
+  printf "https://%s/%s\n" "$host" "$repo_path"
+}
+
+repo_name_from_ref() {
+  local ref="$1"
+  # If URL, strip trailing .git and extract segment after /_git/ or last path component
+  if [[ "$ref" =~ ^https?:// ]]; then
+    ref="${ref%.git}"
+    if [[ "$ref" == *"/_git/"* ]]; then
+      printf "%s\n" "${ref##*/_git/}"
+    else
+      printf "%s\n" "${ref##*/}"
+    fi
   else
-    printf "%s/%s\n" "${base%/}" "$child"
+    # Slug: owner/repo or org/project/repo
+    ref="${ref##*/}"
+    printf "%s\n" "$ref"
   fi
 }
 
-declare -a CANDIDATES=()
-if [[ -n "${TARGET_DIR:-}" ]]; then
-  CANDIDATES+=("$(resolve_path "$BASE_DIR" "$TARGET_DIR")")
-fi
-# Always consider the base dir as a candidate
-CANDIDATES+=("$BASE_DIR")
-# Common fallbacks for writable locations inside containers
-CANDIDATES+=("/workspace" "/workspaces" "/home/${USER:-devuser}/workspace" "/tmp/workspace")
-
-WORKSPACE_DIR=""
-for dir in "${CANDIDATES[@]}"; do
-  [[ -z "$dir" ]] && continue
-  if mkdir -p "$dir" 2>/dev/null; then
-    # Verify we can write here
-    if tmpfile="$dir/.permtest.$$"; : >"$tmpfile" 2>/dev/null; then
-      rm -f "$tmpfile" || true
-      WORKSPACE_DIR="$dir"
-      # Try to relax permissions to avoid future write issues
-      chmod 0777 "$dir" 2>/dev/null || true
-      break
-    fi
-  fi
-done
-
-if [[ -z "$WORKSPACE_DIR" ]]; then
-  # Last-resort writable directory
-  WORKSPACE_DIR="/tmp/workspace-$$"
-  mkdir -p "$WORKSPACE_DIR"
-  chmod 0777 "$WORKSPACE_DIR" 2>/dev/null || true
-fi
-
-cd "$WORKSPACE_DIR"
-
-# Build repository URL if not provided
-REPO_URL="${GIT_URL:-}"
-if [[ -z "$REPO_URL" ]]; then
-  PROVIDER="${GIT_PROVIDER:-}"
-  # lowercase
-  PROVIDER="${PROVIDER,,}"
-  HOST_DEFAULT="github.com"
-  if [[ -n "${GIT_HOST:-}" ]]; then
-    HOST_DEFAULT="$GIT_HOST"
-  elif [[ "$PROVIDER" == "azure" || "$PROVIDER" == "ado" || "$PROVIDER" == "azure-devops" ]]; then
-    HOST_DEFAULT="dev.azure.com"
-  fi
-
-  if [[ "$HOST_DEFAULT" == "github.com" && -z "$PROVIDER" ]]; then
-    REPO_URL="https://github.com/${GIT_REPO}.git"
+# Build a list of repo references (URLs or slugs)
+declare -a REFS=()
+if [[ -n "${GIT_REPOS:-}" ]]; then
+  # Support comma, semicolon, space, or newline separated
+  refs_raw="$GIT_REPOS"
+  refs_raw="${refs_raw//,/ }"; refs_raw="${refs_raw//;/ }"
+  # shellcheck disable=SC2206
+  REFS=($refs_raw)
+else
+  if [[ -n "${GIT_URL:-}" ]]; then
+    REFS+=("$GIT_URL")
   else
-    REPO_SLUG="$GIT_REPO"
-    if [[ "$REPO_SLUG" != *"/_git/"* ]]; then
-      IFS='/' read -r _org _project _repo rest <<<"$REPO_SLUG"
-      if [[ -n "$_org" && -n "$_project" && -n "$_repo" && -z "${rest:-}" ]]; then
-        REPO_PATH="${_org}/${_project}/_git/${_repo}"
-      else
-        REPO_PATH="$REPO_SLUG"
-      fi
-    else
-      REPO_PATH="$REPO_SLUG"
-    fi
-    REPO_URL="https://${HOST_DEFAULT}/${REPO_PATH}"
+    REFS+=("$GIT_REPO")
   fi
 fi
 
@@ -122,10 +120,6 @@ GIT_ASKPASS_SCRIPT=$(mktemp -p "${HOME:-/home/devuser}")
 trap 'rm -f "$GIT_ASKPASS_SCRIPT"' EXIT
 
 USERNAME_DEFAULT="x-access-token"  # GitHub accepts this with PATs; override via GIT_USERNAME
-# If targeting Azure DevOps, set a non-empty default username
-if [[ "$REPO_URL" == *"dev.azure.com"* || "$REPO_URL" == *"visualstudio.com"* ]]; then
-  USERNAME_DEFAULT="azdo"
-fi
 GIT_USERNAME_VALUE="${GIT_USERNAME:-$USERNAME_DEFAULT}"
 
 cat >"$GIT_ASKPASS_SCRIPT" <<'EOF'
@@ -141,52 +135,71 @@ chmod 700 "$GIT_ASKPASS_SCRIPT"
 
 export GIT_ASKPASS="$GIT_ASKPASS_SCRIPT"
 export GIT_TOKEN="$TOKEN"
-export GIT_USERNAME_VALUE="$GIT_USERNAME_VALUE"
 
-if [[ -d .git ]]; then
-  echo "Workspace contains a git repo. Updating..." >&2
-  ORIGIN_URL=$(git remote get-url origin 2>/dev/null || echo "")
-  if [[ -n "$ORIGIN_URL" && "$ORIGIN_URL" != *"${GIT_REPO}"* && "$ORIGIN_URL" != *"${REPO_URL}"* ]]; then
-    if [[ "${GIT_FORCE_RECLONE:-}" == "1" ]]; then
-      echo "Origin mismatch. Re-cloning into workspace due to GIT_FORCE_RECLONE=1" >&2
-      # Clean workspace (including dotfiles), but keep current dir
-      shopt -s dotglob nullglob
-      rm -rf -- *
-      shopt -u dotglob nullglob
-      git -c credential.helper= -c core.askpass="$GIT_ASKPASS_SCRIPT" \
-        clone --branch "$GIT_BRANCH" "$REPO_URL" .
+clone_or_update() {
+  local url="$1" name="$2" branch="$3"
+  local dest="$REPOS_ROOT/$name"
+
+  mkdir -p "$dest"
+  cd "$dest"
+  if [[ -d .git ]]; then
+    echo "[$name] Updating existing repo..." >&2
+    local origin
+    origin=$(git remote get-url origin 2>/dev/null || echo "")
+    if [[ -n "$origin" && "$origin" != *"$name"* && "$origin" != *"$url"* ]]; then
+      if [[ "${GIT_FORCE_RECLONE:-}" == "1" ]]; then
+        echo "[$name] Origin mismatch. Re-cloning due to GIT_FORCE_RECLONE=1" >&2
+        cd "$REPOS_ROOT"
+        rm -rf "$dest"
+        git -c credential.helper= -c core.askpass="$GIT_ASKPASS_SCRIPT" clone --branch "$branch" "$url" "$dest"
+      else
+        echo "[$name] Origin ($origin) does not match ($url). Set GIT_FORCE_RECLONE=1 to replace." >&2
+        cd "$REPOS_ROOT"; return 1
+      fi
     else
-      echo "Existing repo origin ($ORIGIN_URL) does not match requested ($REPO_URL). Set GIT_FORCE_RECLONE=1 to replace." >&2
-      exit 1
+      git remote set-url origin "$url" || true
+      git fetch --all --prune
+      if git show-ref --verify --quiet "refs/heads/$branch"; then
+        git checkout "$branch"
+      else
+        git checkout -B "$branch" "origin/$branch" || git checkout -b "$branch"
+      fi
+      git pull --ff-only origin "$branch" || true
+      cd "$REPOS_ROOT"
     fi
   else
-    # Ensure correct remote URL (handles https/ssh variants)
-    git remote set-url origin "$REPO_URL" || true
-    git fetch --all --prune
-    # Ensure branch exists locally or track it from origin
-    if git show-ref --verify --quiet "refs/heads/$GIT_BRANCH"; then
-      git checkout "$GIT_BRANCH"
-    else
-      git checkout -B "$GIT_BRANCH" "origin/$GIT_BRANCH" || git checkout -b "$GIT_BRANCH"
+    if [[ -n "$(ls -A "$dest" 2>/dev/null || true)" ]]; then
+      if [[ "${GIT_FORCE_RECLONE:-}" == "1" ]]; then
+        echo "[$name] Non-git dir not empty. Re-cloning due to GIT_FORCE_RECLONE=1" >&2
+        rm -rf "$dest"
+      else
+        echo "[$name] Destination exists and is not a git repo. Set GIT_FORCE_RECLONE=1 to replace." >&2
+        cd "$REPOS_ROOT"; return 1
+      fi
     fi
-    git pull --ff-only origin "$GIT_BRANCH" || true
+    git -c credential.helper= -c core.askpass="$GIT_ASKPASS_SCRIPT" clone --branch "$branch" "$url" "$dest"
+    cd "$REPOS_ROOT"
   fi
-elif [[ -n "$(ls -A "$WORKSPACE_DIR" 2>/dev/null || true)" ]]; then
-  if [[ "${GIT_FORCE_RECLONE:-}" == "1" ]]; then
-    echo "Workspace not empty. Re-cloning into workspace due to GIT_FORCE_RECLONE=1" >&2
-    shopt -s dotglob nullglob
-    rm -rf -- *
-    shopt -u dotglob nullglob
-    git -c credential.helper= -c core.askpass="$GIT_ASKPASS_SCRIPT" \
-      clone --branch "$GIT_BRANCH" "$REPO_URL" .
-  else
-    echo "Workspace '${WORKSPACE_DIR}' is not empty and not a git repo. Set GIT_FORCE_RECLONE=1 to replace its contents." >&2
-    exit 1
-  fi
-else
-  # Empty workspace: clone directly into this directory
-  git -c credential.helper= -c core.askpass="$GIT_ASKPASS_SCRIPT" \
-    clone --branch "$GIT_BRANCH" "$REPO_URL" .
-fi
+}
 
-unset TOKEN GIT_TOKEN
+# Iterate over all requested repos
+for ref in "${REFS[@]}"; do
+  # Normalize URL
+  REPO_URL="${ref}"
+  if [[ ! "$REPO_URL" =~ ^https?:// ]]; then
+    REPO_URL="$(build_url_from_slug "$ref")"
+  fi
+
+  # Username default per provider
+  if [[ "$REPO_URL" == *"dev.azure.com"* || "$REPO_URL" == *"visualstudio.com"* ]]; then
+    GIT_USERNAME_VALUE="${GIT_USERNAME:-azdo}"
+  else
+    GIT_USERNAME_VALUE="${GIT_USERNAME:-x-access-token}"
+  fi
+  export GIT_USERNAME_VALUE
+
+  NAME="$(repo_name_from_ref "$ref")"
+  clone_or_update "$REPO_URL" "$NAME" "$GIT_BRANCH"
+done
+
+unset TOKEN GIT_TOKEN GIT_USERNAME_VALUE

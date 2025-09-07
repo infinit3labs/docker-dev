@@ -13,7 +13,7 @@ PROJECT_DIR=${PROJECT_DIR:-/workspace}
 cd "$PROJECT_DIR"
 
 # Optional: secure git clone before setup
-if [[ -n "${GIT_REPO:-}" || -n "${GIT_URL:-}" ]]; then
+if [[ -n "${GIT_REPO:-}" || -n "${GIT_URL:-}" || -n "${GIT_REPOS:-}" ]]; then
   if [[ -x "/usr/local/bin/secure-clone.sh" ]]; then
     /usr/local/bin/secure-clone.sh
   elif [[ -f "./secure-clone.sh" ]]; then

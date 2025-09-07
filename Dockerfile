@@ -143,8 +143,9 @@ COPY --from=builder /etc/ld.so.conf.d/oracle.conf /etc/ld.so.conf.d/oracle.conf
 RUN set -eux; \
     groupadd -r devuser; \
     useradd -r -g devuser -m -s /bin/zsh devuser; \
-    mkdir -p /workspace /home/devuser/.cache/pypoetry /home/devuser/.cache/pip; \
+    mkdir -p /workspace /workspace/repos /home/devuser/.cache/pypoetry /home/devuser/.cache/pip; \
     chown -R devuser:devuser /workspace /home/devuser/.cache; \
+    chmod 0775 /workspace /workspace/repos || true; \
     ldconfig
 
 ARG POETRY_VERSION=1.8.4

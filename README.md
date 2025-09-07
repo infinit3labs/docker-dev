@@ -27,17 +27,17 @@ Project layout highlights:
 - `entrypoint.sh` – in-container setup (secure clone + Poetry install)
 - `secure-clone.sh` – safe private repo cloning via token file/secret
 - `secrets/git_token` – local secret file you create (mounted by Compose)
-- `workspace/` – host folder mapped to `/workspace` in the container
+- Named volume `workspace-data` mapped to `/workspace` in the container
 
 ## 1) One-time setup
 
-Create the secret file used by Compose to mount your Git token (GitHub or Azure DevOps PAT) as `/run/secrets/git_token` and ensure the local workspace directory exists (mapped to `/workspace` in the container):
+Create the secret file used by Compose to mount your Git token (GitHub or Azure DevOps PAT) as `/run/secrets/git_token`:
 
 ```bash
 mkdir -p secrets
 printf '%s' 'YOUR_GIT_PAT' > secrets/git_token
 chmod 600 secrets/git_token
-mkdir -p workspace
+docker volume create workspace-data # optional; compose will create if missing
 ```
 
 Notes:
@@ -175,8 +175,9 @@ What happens on startup:
 
 Where files live:
 
-- Host `./workspace` is mapped to container `/workspace`.
-- If you enabled secure clone, your repo appears at `/workspace/repo` by default (override with `TARGET_DIR`).
+- Named volume `workspace-data` is mounted at container `/workspace` (no host bind). Repos are placed under `/workspace/repos/<repo>`.
+  - Use `GIT_REPOS` to clone multiple (comma/space/semicolon separated), e.g.: `GIT_REPOS="owner/a,owner/b https://dev.azure.com/org/project/_git/repo"`.
+  - `GIT_REPO` or `GIT_URL` also supported for a single repo.
 
 ### Day-2 operations
 
@@ -222,6 +223,11 @@ export GIT_TOKEN_FILE=/run/secrets/git_token
 ```
 
 It uses a temporary ASKPASS script so the token is never shown in process lists and is not written to git config. For Azure DevOps, set `GIT_URL=...` or `GIT_PROVIDER=azure` with `GIT_REPO=<org>/<project>/<repo>` and optionally `GIT_USERNAME=azdo`.
+
+Multi-project support:
+
+- Set `GIT_REPOS` with a list of slugs/URLs; each is cloned or updated under `/workspace/repos/<name>`.
+- The script ensures the repos directory exists and is writable. If a repo already exists, it updates remotes and pulls the specified branch.
 
 ## 6) Poetry environment behavior
 
@@ -311,7 +317,7 @@ Notes for multi-arch:
 - Image: builds from local `Dockerfile`, tagged `docker-dev-secure:latest`
 - Secrets: mounts `secrets/git_token` to `/run/secrets/git_token`
 - Volumes:
-  - `./workspace:/workspace:rw` – your working directory
+  - `workspace-data:/workspace:rw` – named volume for your working directory
   - `~/.gitconfig:/home/devuser/.gitconfig:ro`
   - `~/.ssh:/home/devuser/.ssh:ro`
 - Entrypoint: `/usr/local/bin/entrypoint.sh` (then `/bin/zsh`)
