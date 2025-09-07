@@ -2,6 +2,8 @@
 
 An all-in-one developer container with Ubuntu 24.04, Python (pyenv + Poetry), Node.js, OpenJDK 21, Apache Spark, Azure CLI, Oracle Instant Client, and a polished zsh experience (Oh My Zsh + Powerlevel10k). Secrets are never baked into the image; private repos can be securely cloned at runtime.
 
+Auto build on Dockerhub enabled.
+
 ## What you get
 
 - Ubuntu 24.04 base, non-root user (devuser)
