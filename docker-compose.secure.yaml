@@ -1,21 +1,15 @@
 services:
-  dev:
-    image: ${IMAGE_NAME:-${IMAGE_NAME:-}}
+  dp-databricks-application:
+    image: "${IMAGE_NAME:-}"
     platform: linux/amd64
     environment:
-      - IMAGE_NAME=${IMAGE_NAME:-}
-      - GIT_TOKEN_FILE=${GIT_TOKEN_FILE:-/run/secrets/git_token}
-      - GIT_URL=${GIT_URL:-}
-      - GIT_REPO=${GIT_REPO:-}
-      - GIT_REPOS=${GIT_REPOS:-}
-      - GIT_BRANCH=${GIT_BRANCH:-main}
-      - GIT_PROVIDER=${GIT_PROVIDER:-}
-      - GIT_HOST=${GIT_HOST:-}
-      - GIT_USERNAME=${GIT_USERNAME:-}
-      - GIT_TOKEN=${GIT_TOKEN:-}
-      - GIT_FORCE_RECLONE=${GIT_FORCE_RECLONE:-1}
-      - DOCKERFILE=${DOCKERFILE:-Dockerfile}
-      - PROJECT_DIR=${PROJECT_DIR:-/workspace}
+      - IMAGE_NAME="${IMAGE_NAME:-}"
+      - GIT_TOKEN_FILE=/run/secrets/git_token
+      - GIT_REPO="${GIT_REPO:-}"
+      - GIT_BRANCH=main
+      - GIT_USERNAME=azdo
+      - DOCKERFILE=Dockerfile
+      - PROJECT_DIR=/workspace
     secrets:
       - git_token
     volumes:
@@ -29,4 +23,6 @@ secrets:
 
 volumes:
   workspace-data:
+    driver: local
+  repo-data:
     driver: local

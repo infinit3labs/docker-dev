@@ -42,7 +42,7 @@ else
 fi
 
 BASE_DIR="${PROJECT_DIR:-/workspace}"
-REPOS_ROOT="${REPOS_ROOT:-${BASE_DIR%/}/repos}"
+REPOS_ROOT="$BASE_DIR"
 
 # Ensure the repos root exists and is writable (should be a named volume mounted at /workspace)
 mkdir -p "$REPOS_ROOT"
