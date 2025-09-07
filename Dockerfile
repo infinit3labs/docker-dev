@@ -2,7 +2,7 @@
 #### Secure multi-stage build with pinned versions and least privilege
 
 # -------- Builder stage: toolchains and dependencies (amd64 only) --------
-FROM ubuntu:24.04 AS builder
+FROM --platform=linux/amd64 ubuntu:24.04 AS builder
 
 ARG PYTHON_VERSION=3.12.3
 ARG SPARK_VERSION=4.0.0
@@ -132,7 +132,7 @@ ENV LD_LIBRARY_PATH=/opt/oracle
 
 
 # -------- Final stage: minimal runtime, non-root --------
-FROM ubuntu:24.04
+FROM --platform=linux/amd64 ubuntu:24.04
 
 # Copy only what is needed from builder
 COPY --from=builder /opt /opt
