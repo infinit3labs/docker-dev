@@ -1,0 +1,13 @@
+# Ignore secrets and local env files
+secrets/
+.env
+.env.*
+# Keep the template tracked
+!.env.example
+
+# macOS
+.DS_Store
+
+# Editor
+.vscode/
+.idea/
