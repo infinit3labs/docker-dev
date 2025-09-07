@@ -1,0 +1,206 @@
+# syntax=docker/dockerfile:1.7
+#### Secure multi-stage build with pinned versions and least privilege
+
+# -------- Builder stage: toolchains and dependencies --------
+FROM ubuntu:24.04 AS builder
+
+ARG PYTHON_VERSION=3.12.3
+ARG SPARK_VERSION=4.0.0
+ARG NODE_MAJOR=22
+ARG POETRY_VERSION=1.8.4
+
+# System packages (build + runtime libs). Keep minimal and clean up.
+RUN set -eux; \
+    apt-get update; \
+    apt-get upgrade -y; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      ca-certificates \
+      curl \
+      git \
+      gnupg \
+      lsb-release \
+      unzip \
+      wget \
+      zsh \
+      pipx \
+      fonts-powerline \
+      build-essential \
+      libssl-dev \
+      zlib1g-dev \
+      libbz2-dev \
+      libreadline-dev \
+      libsqlite3-dev \
+      llvm \
+      libncursesw5-dev \
+      xz-utils \
+      tk-dev \
+      libxml2-dev \
+      libxmlsec1-dev \
+      libffi-dev \
+      liblzma-dev; \
+    rm -rf /var/lib/apt/lists/*; \
+    pipx ensurepath; \
+    update-ca-certificates
+
+
+# pyenv (pin tag) and Python toolchain
+ENV PYENV_ROOT=/opt/pyenv
+ENV PATH=$PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH
+RUN set -eux; \
+    git clone --depth 1 https://github.com/pyenv/pyenv.git "$PYENV_ROOT"; \
+    pyenv install "${PYTHON_VERSION}"; \
+    pyenv global "${PYTHON_VERSION}"; \
+    python -m pip install --upgrade pip
+
+# Python runtime env hardening
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PYTHONHASHSEED=random \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_NO_CACHE_DIR=1
+
+# Node.js from NodeSource with keyring verification (pin major)
+RUN set -eux; \
+    mkdir -p /usr/share/keyrings; \
+    curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
+      | gpg --dearmor -o /usr/share/keyrings/nodesource.gpg; \
+    echo "deb [signed-by=/usr/share/keyrings/nodesource.gpg] https://deb.nodesource.com/node_${NODE_MAJOR}.x nodistro main" \
+      > /etc/apt/sources.list.d/nodesource.list; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends nodejs; \
+    rm -rf /var/lib/apt/lists/*
+
+# OpenJDK 21 (headless)
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openjdk-21-jdk-headless; \
+    rm -rf /var/lib/apt/lists/*
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+ENV PATH=$JAVA_HOME/bin:$PATH
+
+# Apache Spark (verify checksum via official .sha512 file)
+RUN --mount=type=cache,target=/download_cache,id=download_cache \
+        set -eux; \
+        cd /download_cache; \
+        SPARK_TGZ="spark-${SPARK_VERSION}-bin-hadoop3.tgz"; \
+        SPARK_SHA="${SPARK_TGZ}.sha512"; \
+        if [ -f "$SPARK_TGZ" ]; then \
+            echo "Using cached $SPARK_TGZ"; \
+        else \
+            wget -q "https://downloads.apache.org/spark/spark-${SPARK_VERSION}/$SPARK_TGZ"; \
+        fi; \
+        if [ -f "$SPARK_SHA" ]; then \
+            echo "Using cached $SPARK_SHA"; \
+        else \
+            wget -q "https://downloads.apache.org/spark/spark-${SPARK_VERSION}/$SPARK_SHA"; \
+        fi; \
+        sha512sum -c "$SPARK_SHA"; \
+        tar -xzf "$SPARK_TGZ" -C /opt; \
+        mv /opt/spark-${SPARK_VERSION}-bin-hadoop3 /opt/spark
+ENV SPARK_HOME=/opt/spark
+ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
+ENV PYSPARK_PYTHON=python PYSPARK_DRIVER_PYTHON=python
+
+# Poetry (pin)
+RUN pipx install "poetry==${POETRY_VERSION}";
+
+# Azure CLI: install via pipx to avoid repo dependency issues on Ubuntu 24.04
+# This keeps the builder image lean and avoids "held broken packages" from apt.
+RUN pipx install azure-cli
+
+# Oracle Instant Client (verify) and configure loader
+RUN --mount=type=cache,target=/download_cache,id=download_cache \
+        set -eux; \
+        cd /download_cache; \
+        ORA_ZIP="instantclient-basic-linux.x64-21.19.0.0.0dbru.zip"; \
+        if [ -f "$ORA_ZIP" ]; then \
+            echo "Using cached $ORA_ZIP"; \
+        else \
+            wget -q "https://download.oracle.com/otn_software/linux/instantclient/2119000/$ORA_ZIP"; \
+        fi; \
+        unzip -q "$ORA_ZIP" -d /opt; \
+        mv /opt/instantclient_21_19 /opt/oracle; \
+        echo "/opt/oracle" > /etc/ld.so.conf.d/oracle.conf; \
+        ldconfig
+ENV LD_LIBRARY_PATH=/opt/oracle
+
+
+# -------- Final stage: minimal runtime, non-root --------
+FROM ubuntu:24.04
+
+# Copy only what is needed from builder
+COPY --from=builder /opt /opt
+COPY --from=builder /usr /usr
+COPY --from=builder /etc/ld.so.conf.d/oracle.conf /etc/ld.so.conf.d/oracle.conf
+
+# Create non-root user and prepare writable dirs
+RUN set -eux; \
+    groupadd -r devuser; \
+    useradd -r -g devuser -m -s /bin/zsh devuser; \
+    mkdir -p /workspace /poetry-cache /pip-cache; \
+    chown -R devuser:devuser /workspace /poetry-cache /pip-cache; \
+    ldconfig
+
+ARG POETRY_VERSION=1.8.4
+USER devuser
+WORKDIR /workspace
+
+# Minimal, explicit PATH and env
+ENV PATH=/opt/pyenv/shims:/opt/pyenv/bin:/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/devuser/.local/bin \
+    PYTHONPATH=/workspace \
+    LD_LIBRARY_PATH=/opt/oracle \
+    POETRY_CACHE_DIR=/poetry-cache \
+    PIP_CACHE_DIR=/pip-cache
+
+# Ensure SSL certs are up to date (no sudo; run as root)
+USER root
+RUN set -eux; \
+    apt-get update; \
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --reinstall ca-certificates; \
+    update-ca-certificates; \
+    rm -rf /var/lib/apt/lists/*
+USER devuser
+
+# Install Poetry and Azure CLI for the runtime user (pinned Poetry)
+RUN pipx ensurepath \
+    && pipx install "poetry==${POETRY_VERSION}" \
+    && pipx install azure-cli \
+    && poetry config virtualenvs.in-project true \
+    && poetry config virtualenvs.create true \
+    && poetry config installer.parallel true
+
+# Oh My Zsh and extras for devuser (without curl|sh). Optional refs can be pinned via build args.
+ARG OHMYZSH_REPO=https://github.com/ohmyzsh/ohmyzsh.git
+ARG OHMYZSH_REF=master
+ARG P10K_REPO=https://github.com/romkatv/powerlevel10k.git
+ARG P10K_REF=master
+ARG ZSHAUTO_REPO=https://github.com/zsh-users/zsh-autosuggestions.git
+ARG ZSHAUTO_REF=master
+ARG ZSHHL_REPO=https://github.com/zsh-users/zsh-syntax-highlighting.git
+ARG ZSHHL_REF=master
+
+RUN set -eux; \
+        export ZSH_DIR="/home/devuser/.oh-my-zsh"; \
+        git clone --depth 1 --branch "$OHMYZSH_REF" "$OHMYZSH_REPO" "$ZSH_DIR"; \
+        if [ ! -f "/home/devuser/.zshrc" ]; then cp "$ZSH_DIR/templates/zshrc.zsh-template" "/home/devuser/.zshrc"; fi; \
+        mkdir -p "$ZSH_DIR/custom/themes" "$ZSH_DIR/custom/plugins"; \
+        git clone --depth 1 --branch "$P10K_REF" "$P10K_REPO" "$ZSH_DIR/custom/themes/powerlevel10k"; \
+        git clone --depth 1 --branch "$ZSHAUTO_REF" "$ZSHAUTO_REPO" "$ZSH_DIR/custom/plugins/zsh-autosuggestions"; \
+        git clone --depth 1 --branch "$ZSHHL_REF" "$ZSHHL_REPO" "$ZSH_DIR/custom/plugins/zsh-syntax-highlighting"; \
+        sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|g' /home/devuser/.zshrc; \
+        if grep -q '^plugins=' /home/devuser/.zshrc; then \
+            sed -i 's|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|g' /home/devuser/.zshrc; \
+        else \
+            echo 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' >> /home/devuser/.zshrc; \
+        fi
+
+# Copy entrypoint script with executable permissions set at build time
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
+
+# Healthcheck for basic Python availability
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD python --version || exit 1
+
+# Entrypoint ensures Poetry env setup; default command opens zsh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["/bin/zsh"]

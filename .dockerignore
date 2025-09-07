@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pytest_cache/
+.venv/
+
+# Poetry
+.poetry/
+.poetry-cache/
+
+# Node
+node_modules/
+
+# Git
+.git/
+.gitignore
+
+# IDE/Editor
+.vscode/
+.idea/
+.DS_Store
+
+# Build outputs
+build/
+dist/
+
+# Local config and secrets
+.env
+.env.*
+secrets/
