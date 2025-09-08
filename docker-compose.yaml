@@ -6,6 +6,7 @@ services:
   dp-databricks-application:
     image: "${IMAGE_NAME:-}"
     platform: linux/amd64
+    user: "0:0"
     environment:
       - IMAGE_NAME="${IMAGE_NAME:-}"
       - GIT_TOKEN_FILE=/run/secrets/git_token
@@ -18,8 +19,8 @@ services:
     secrets:
       - git_token
     volumes:
-      # Bind-mount overrides for local iteration
-      - ./workspace:/workspace:rw
+      # Use a named volume for /workspace to avoid Windows bind-mount permission issues
+      - workspace:/workspace
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./secure-clone.sh:/usr/local/bin/secure-clone.sh:ro
     tty: true
@@ -28,3 +29,6 @@ services:
 secrets:
   git_token:
     file: ./secrets/git_token
+
+volumes:
+  workspace:
