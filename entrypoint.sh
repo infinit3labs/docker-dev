@@ -71,6 +71,21 @@ else
   echo 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' >> "$ZSHRC"
 fi
 
+# Enable pyenv and pipx in .zshrc if not already present
+if ! grep -q 'pyenv init' "$ZSHRC"; then
+  echo '' >> "$ZSHRC"
+  echo '# Pyenv initialization' >> "$ZSHRC"
+  echo 'export PYENV_ROOT="$HOME/.pyenv"' >> "$ZSHRC"
+  echo 'export PATH="$PYENV_ROOT/bin:$PATH"' >> "$ZSHRC"
+  echo 'eval "$(pyenv init --path)"' >> "$ZSHRC"
+  echo 'eval "$(pyenv init -)"' >> "$ZSHRC"
+fi
+if ! grep -q 'pipx' "$ZSHRC"; then
+  echo '' >> "$ZSHRC"
+  echo '# Pipx initialization' >> "$ZSHRC"
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$ZSHRC"
+fi
+
 # Optional: secure git clone before setup
 if [[ -n "${GIT_REPO:-}" || -n "${GIT_URL:-}" || -n "${GIT_REPOS:-}" ]]; then
   if [[ -x "/usr/local/bin/secure-clone.sh" ]]; then
