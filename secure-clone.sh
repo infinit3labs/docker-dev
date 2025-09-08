@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# Enable extended globbing for pattern-based trimming in sanitize_ref
+shopt -s extglob || true
 
 # Secure way to clone with credentials. Preferred: Docker/K8s secret mounted at /run/secrets/git_token
 #
@@ -119,12 +121,26 @@ repo_name_from_ref() {
 
 # Build a list of repo references (URLs or slugs)
 declare -a REFS=()
+sanitize_ref() {
+  local s="$1"
+  # Trim leading/trailing whitespace
+  s="${s##+([[:space:]])}"
+  s="${s%%+([[:space:]])}"
+  # Strip surrounding single/double quotes if present
+  if [[ ( "$s" == \"*\" ) || ( "$s" == \'*\' ) ]]; then
+    s="${s:1:${#s}-2}"
+  fi
+  printf '%s\n' "$s"
+}
+
 if [[ -n "${GIT_REPOS:-}" ]]; then
   # Support comma, semicolon, space, or newline separated
   refs_raw="$GIT_REPOS"
   refs_raw="${refs_raw//,/ }"; refs_raw="${refs_raw//;/ }"
   # shellcheck disable=SC2206
+  set -f
   REFS=($refs_raw)
+  set +f
 else
   if [[ -n "${GIT_URL:-}" ]]; then
     REFS+=("$GIT_URL")
@@ -132,6 +148,16 @@ else
     REFS+=("$GIT_REPO")
   fi
 fi
+
+# Sanitize each ref (trim quotes/whitespace) and drop empties
+clean_refs=()
+for r in "${REFS[@]}"; do
+  sr=$(sanitize_ref "$r")
+  if [[ -n "$sr" ]]; then
+    clean_refs+=("$sr")
+  fi
+done
+REFS=("${clean_refs[@]}")
 
 # Avoid leaking token in process listings by using env var expansion inside URL
 # Using git -c to avoid writing credentials to config
@@ -224,7 +250,9 @@ for ref in "${REFS[@]}"; do
   fi
   export GIT_USERNAME_VALUE
 
+  # Sanitize name as well to avoid stray quotes/whitespace in folder name
   NAME="$(repo_name_from_ref "$ref")"
+  NAME="$(sanitize_ref "$NAME")"
   log "processing ref=$ref NAME=$NAME REPO_URL=$REPO_URL"
   clone_or_update "$REPO_URL" "$NAME" "$GIT_BRANCH"
 done

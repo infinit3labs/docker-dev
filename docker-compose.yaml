@@ -5,17 +5,17 @@ services:
     env_file:
       - .env
     environment:
-      - IMAGE_NAME="${IMAGE_NAME:-}"
-      - GIT_TOKEN_FILE=/run/secrets/git_token
-      - GIT_REPO="${GIT_REPO:-}"
-      - GIT_BRANCH=main
-      - GIT_USERNAME=azdo
-      - ENABLE_SUPERVISOR=1
-      - SUPERVISOR_MAX_RETRIES=3
-      - SUPERVISOR_BASE_BACKOFF=1
-      - DOCKERFILE=Dockerfile
-      - PROJECT_DIR=/workspace
-      - POETRY_GROUPS=dev
+      IMAGE_NAME: ${IMAGE_NAME:-}
+      GIT_TOKEN_FILE: /run/secrets/git_token
+      GIT_REPO: ${GIT_REPO:-}
+      GIT_BRANCH: main
+      GIT_USERNAME: azdo
+      ENABLE_SUPERVISOR: "1"
+      SUPERVISOR_MAX_RETRIES: "3"
+      SUPERVISOR_BASE_BACKOFF: "1"
+      DOCKERFILE: Dockerfile
+      PROJECT_DIR: /workspace
+      POETRY_GROUPS: dev
     secrets:
       - git_token
     volumes:
