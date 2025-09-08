@@ -15,19 +15,18 @@ Auto build on Dockerhub enabled.
 
 ## Prerequisites
 
-- macOS with Docker Desktop (Docker Engine + Compose v2)
-- zsh shell (default on macOS)
+- Docker Desktop (Docker Engine + Compose v2)
 - Optional: Install a Nerd Font for best Powerlevel10k visuals
 
 Project layout highlights:
 
 - `Dockerfile` – secure multi-stage build
-- `docker-compose.secure.yaml` – service with volumes, secrets, env
+- `docker-compose.yaml` – unified compose (image + local bind mounts)
 - `build-secure.sh` – helper: build + quick secret keyword check + Trivy scan
 - `entrypoint.sh` – in-container setup (secure clone + Poetry install)
 - `secure-clone.sh` – safe private repo cloning via token file/secret
 - `secrets/git_token` – local secret file you create (mounted by Compose)
-- Named volume `workspace-data` mapped to `/workspace` in the container
+- `./workspace` bind-mounted to `/workspace` in the container
 
 ## 1) One-time setup
 
@@ -37,13 +36,12 @@ Create the secret file used by Compose to mount your Git token (GitHub or Azure 
 mkdir -p secrets
 printf '%s' 'YOUR_GIT_PAT' > secrets/git_token
 chmod 600 secrets/git_token
-docker volume create workspace-data # optional; compose will create if missing
 ```
 
 Notes:
 
 - The token is only read at runtime; it is not embedded in the image.
-- The Compose file can mount your `~/.gitconfig` and `~/.ssh` read-only into the container. Ensure `~/.ssh` permissions are strict (700 dir, 600 keys).
+- You may mount your `~/.gitconfig` and `~/.ssh` read-only into the container. Ensure `~/.ssh` permissions are strict (700 dir, 600 keys).
 - Ensure `secure-clone.sh` is executable on the host so it can be invoked when mounted:
 
 ```bash
@@ -68,7 +66,7 @@ DOCKER_BUILDKIT=1 docker build -t ${IMAGE_NAME:-} -f Dockerfile .
 Option C — let Compose handle the build:
 
 ```bash
-docker compose -f docker-compose.secure.yaml build
+docker compose build
 ```
 
 Option D — multi-arch build (arm64 host producing amd64+arm64):
@@ -124,7 +122,7 @@ Steps:
 4) Run on any host (amd64 or arm64):
 
   ```bash
-  docker compose -f docker-compose.secure.yaml up -d
+  docker compose up -d
   ```
 
 Notes and alternatives:
@@ -134,14 +132,32 @@ Notes and alternatives:
   - Or export archives per-arch: `--output type=tar,dest=dev-amd64.tar` and load on each host with `docker load -i dev-amd64.tar`.
   - Recommended for teams: push a multi-arch tag to a registry and use `IMAGE_NAME` to reference it.
 
-Troubleshooting:
+## 2b) Faster local iteration (no rebuilds)
 
-- "–load only supports a single platform": Use `--push` for multi-arch, or build per-arch with `--load`.
-- Platform mismatch warnings: either build/pull the correct arch, or set `platform:` under the compose service to force (`linux/amd64` or `linux/arm64`).
+To iterate on scripts without rebuilding the image, bind-mount your workspace and scripts using the unified compose file `docker-compose.yaml`.
+
+```bash
+# Up (detached)
+docker compose up -d
+
+# Logs (follow)
+docker compose logs -f
+
+# Exec a shell
+docker compose exec dp-databricks-application /bin/zsh -l
+
+# Recreate after changes to compose or scripts
+docker compose up -d --force-recreate
+
+# Rebuild image only after Dockerfile/base changes
+docker compose build --no-cache && docker compose up -d
+```
+
+Changes to `entrypoint.sh`, `secure-clone.sh`, or files under `./workspace` take effect on container restart because they are bind-mounted.
 
 ## 3) Configure runtime settings (optional)
 
-The Compose file sets a few environment variables for the `dev` service:
+The Compose file sets a few environment variables for the service:
 
 - `GIT_TOKEN_FILE=/run/secrets/git_token` (points to the mounted secret)
 - For GitHub: set `GIT_REPO=owner/repo` or `GIT_URL=https://github.com/owner/repo.git`
@@ -150,20 +166,20 @@ The Compose file sets a few environment variables for the `dev` service:
 - Optional: `GIT_HOST=dev.azure.com`, `GIT_USERNAME=azdo` (Azure DevOps)
 - `GIT_BRANCH=main`
 
-You can edit these in `docker-compose.secure.yaml` or override them on the command line with `--env-file` or `-e` flags. If `GIT_REPO` is provided, `entrypoint.sh` will run `secure-clone.sh` to clone the repo into `/workspace/repo` at container start.
+Edit these in `docker-compose.yaml` or override on the command line with `--env-file` or `-e` flags. If `GIT_REPO` is provided, `entrypoint.sh` will run `secure-clone.sh` to clone the repo into `/workspace/repos/<name>` at container start.
 
 ## 4) Run the dev environment (Compose)
 
-Interactive foreground run (shows logs and opens zsh):
+Interactive foreground run (shows logs):
 
 ```bash
-docker compose -f docker-compose.secure.yaml up --build
+docker compose up
 ```
 
 Detached mode (run in background):
 
 ```bash
-docker compose -f docker-compose.secure.yaml up -d --build
+docker compose up -d
 ```
 
 What happens on startup:
@@ -175,7 +191,7 @@ What happens on startup:
 
 Where files live:
 
-- Named volume `workspace-data` is mounted at container `/workspace` (no host bind). Repos are placed under `/workspace/repos/<repo>`.
+- `./workspace` is bind-mounted to `/workspace`. Repos are placed under `/workspace/repos/<repo>`.
   - Use `GIT_REPOS` to clone multiple (comma/space/semicolon separated), e.g.: `GIT_REPOS="owner/a,owner/b https://dev.azure.com/org/project/_git/repo"`.
   - `GIT_REPO` or `GIT_URL` also supported for a single repo.
 
@@ -184,31 +200,31 @@ Where files live:
 - Attach a shell in a running container:
 
   ```bash
-  docker compose -f docker-compose.secure.yaml exec dev zsh
+  docker compose exec dp-databricks-application /bin/zsh -l
   ```
 
 - View logs:
 
   ```bash
-  docker compose -f docker-compose.secure.yaml logs -f
+  docker compose logs -f
   ```
 
 - Stop services:
 
   ```bash
-  docker compose -f docker-compose.secure.yaml down
+  docker compose down
   ```
 
-- Clean up volumes too (removes Compose-managed volumes; your mapped `./workspace` stays as-is):
+- Clean up volumes too (removes Compose-managed volumes):
 
   ```bash
-  docker compose -f docker-compose.secure.yaml down -v
+  docker compose down -v
   ```
 
 - Rebuild after Dockerfile changes:
 
   ```bash
-  docker compose -f docker-compose.secure.yaml build --no-cache
+  docker compose build --no-cache && docker compose up -d
   ```
 
 ## 5) Secure repo cloning (manual use)
@@ -291,7 +307,7 @@ Best practices:
 ## 9) Troubleshooting
 
 - Permission denied accessing `~/.ssh` from the container: ensure strict permissions (e.g., `chmod 700 ~/.ssh && chmod 600 ~/.ssh/id_*`).
-- Token not found: confirm `secrets/git_token` exists and is referenced under `secrets:` in the Compose file.
+- Token not found: confirm `secrets/git_token` exists and is referenced under the Compose `secrets:`.
 - Slow `poetry install`: first run builds wheels; subsequent runs are faster. Consider caching with the same image or keeping the container running.
 - Fonts look off in the prompt: install a Nerd Font locally and set it in your terminal.
 - Azure CLI or Node require outbound network to fetch packages; ensure your host network allows it during build.
@@ -299,29 +315,23 @@ Best practices:
 
    ```yaml
    services:
-     dev:
+     dp-databricks-application:
        platform: linux/amd64
-       build:
-         platform: linux/amd64
    ```
 
-   Then rebuild and start: `docker compose -f docker-compose.secure.yaml up -d --build`. If you need both architectures, build a multi-arch image with Buildx: `docker buildx build --platform linux/amd64,linux/arm64 -t your/image:tag --push .` and reference it in compose.
+   Then rebuild and start: `docker compose up -d --build`. If you need both architectures, build a multi-arch image with Buildx: `docker buildx build --platform linux/amd64,linux/arm64 -t your/image:tag --push .` and reference it in compose.
 
 Notes for multi-arch:
 - The Dockerfile is now fixed to amd64 (JAVA_HOME and Oracle Instant Client pinned to x64).
 - For local-only use on one machine, you can omit Buildx and just `docker compose build` on that machine.
 - For sharing across archs, use Buildx to push a multi-arch tag and reference it via `IMAGE_NAME`.
 
-## Reference: Compose service `dev`
+## Reference: Compose service `dp-databricks-application`
 
-- Image: builds from local `Dockerfile`, tagged `docker-dev-secure:latest`
+- Image: `${IMAGE_NAME:-}`
 - Secrets: mounts `secrets/git_token` to `/run/secrets/git_token`
 - Volumes:
-  - `workspace-data:/workspace:rw` – named volume for your working directory
-  - `~/.gitconfig:/home/devuser/.gitconfig:ro`
-  - `~/.ssh:/home/devuser/.ssh:ro`
+  - `./workspace:/workspace:rw` – bind mount for your working directory
+  - `./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro`
+  - `./secure-clone.sh:/usr/local/bin/secure-clone.sh:ro`
 - Entrypoint: `/usr/local/bin/entrypoint.sh` (then `/bin/zsh`)
-
-## License / Attribution
-
-This Docker configuration pulls and installs third-party tooling. Review licenses for each dependency (Python, Node.js, OpenJDK, Spark, Azure CLI, Oracle Instant Client, Oh My Zsh, Powerlevel10k, plugins) before distribution.

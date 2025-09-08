@@ -1,3 +1,7 @@
+# Unified local compose for Windows: secure base + local overrides
+# - Pulls remote image
+# - Mounts secrets and bind-mounts workspace and scripts for fast iteration
+
 services:
   dp-databricks-application:
     image: "${IMAGE_NAME:-}"
@@ -10,19 +14,17 @@ services:
       - GIT_USERNAME=azdo
       - DOCKERFILE=Dockerfile
       - PROJECT_DIR=/workspace
+      - POETRY_GROUPS=dev
     secrets:
       - git_token
     volumes:
-      - workspace-data:/workspace:rw
+      # Bind-mount overrides for local iteration
+      - ./workspace:/workspace:rw
+      - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
+      - ./secure-clone.sh:/usr/local/bin/secure-clone.sh:ro
     tty: true
     stdin_open: true
 
 secrets:
   git_token:
     file: ./secrets/git_token
-
-volumes:
-  workspace-data:
-    driver: local
-  repo-data:
-    driver: local

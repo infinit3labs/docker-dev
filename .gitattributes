@@ -1,0 +1,15 @@
+# Normalize line endings
+* text=auto eol=lf
+
+# Force LF for bash scripts and Docker/Compose files
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Keep binaries untouched
+*.zip -text
+*.jar -text
+*.tgz -text
+*.gz -text
