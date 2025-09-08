@@ -148,7 +148,7 @@ RUN set -eux; \
     chmod 0775 /workspace /workspace/repos || true; \
     ldconfig
 
-ARG POETRY_VERSION=1.8.4
+ARG POETRY_VERSION=2.1.4
 USER devuser
 WORKDIR /workspace
 
