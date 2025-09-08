@@ -40,6 +40,49 @@ fi
 
 cd "$PROJECT_DIR"
 
+# Configure global Git options (idempotent, runs as devuser)
+if command -v git >/dev/null 2>&1; then
+  log "configuring global git settings"
+  git_conf_set() {
+    local key="$1" val="$2"
+    # Set only if non-empty value provided and key not already set
+    if [[ -n "$val" ]]; then
+      if git config --global --get "$key" >/dev/null 2>&1; then
+        :
+      else
+        git config --global "$key" "$val" || log "failed to set git $key"
+      fi
+    fi
+  }
+
+  # Required/requested settings with env overrides
+  git_conf_set user.name  "${GIT_USER_NAME:-}"
+  git_conf_set user.email "${GIT_USER_EMAIL:-}"
+  git_conf_set credential.useHttpPath "${GIT_CREDENTIAL_USE_HTTP_PATH:-true}"
+
+  # Sensible defaults (overridable via env)
+  git_conf_set fetch.prune         "${GIT_FETCH_PRUNE:-true}"
+  git_conf_set pull.rebase         "${GIT_PULL_REBASE:-false}"
+  git_conf_set rebase.autoStash    "${GIT_REBASE_AUTOSTASH:-true}"
+  git_conf_set init.defaultBranch  "${GIT_DEFAULT_BRANCH:-main}"
+  git_conf_set push.default        "${GIT_PUSH_DEFAULT:-simple}"
+  git_conf_set color.ui            "${GIT_COLOR_UI:-auto}"
+  git_conf_set core.autocrlf       "${GIT_CORE_AUTOCRLF:-false}"
+  git_conf_set core.filemode       "${GIT_CORE_FILEMODE:-false}"
+  git_conf_set log.date            "${GIT_LOG_DATE:-iso}"
+
+  # Mark the workspace as safe to avoid dubious ownership warnings in bind mounts
+  # Space-separated list; supports globs like $PROJECT_DIR/repos/*
+  IFS=' ' read -r -a _safe_dirs <<< "${GIT_SAFE_DIRECTORIES:-$PROJECT_DIR $PROJECT_DIR/repos/*}"
+  # Capture once to avoid pipefail; compare via here-string
+  _existing_safe_dirs=$(git config --global --get-all safe.directory 2>/dev/null || true)
+  for d in "${_safe_dirs[@]}"; do
+    if ! grep -Fxq "$d" <<< "$_existing_safe_dirs"; then
+      git config --global --add safe.directory "$d" || true
+    fi
+  done
+fi
+
 # Unattended Oh My Zsh and plugin installation (idempotent)
 OHMYZSH_REPO="${OHMYZSH_REPO:-https://github.com/ohmyzsh/ohmyzsh.git}"
 OHMYZSH_REF="${OHMYZSH_REF:-master}"
