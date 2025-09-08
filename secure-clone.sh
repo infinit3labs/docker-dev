@@ -29,6 +29,11 @@ if [[ -z "${GIT_URL:-}" && -z "${GIT_REPO:-}" && -z "${GIT_REPOS:-}" ]]; then
   exit 1
 fi
 
+## If the parent process didn't preserve environment when switching users,
+## fall back to the standard Docker secrets path so the token can still be
+## discovered when `/run/secrets/git_token` is mounted by compose.
+GIT_TOKEN_FILE="${GIT_TOKEN_FILE:-/run/secrets/git_token}"
+
 TOKEN=""
 if [[ -n "${GIT_TOKEN_FILE:-}" && -f "${GIT_TOKEN_FILE}" ]]; then
   # Trim trailing newlines/CR from token files to avoid auth failures
@@ -42,15 +47,30 @@ else
 fi
 
 BASE_DIR="${PROJECT_DIR:-/workspace}"
-REPOS_ROOT="$BASE_DIR"
+# Clone into a `repos` subdirectory under the project dir so the workspace/repo
+# layout matches the repo layout expected by users.
+REPOS_ROOT="$BASE_DIR/repos"
 
 # Ensure the repos root exists and is writable (should be a named volume mounted at /workspace)
 mkdir -p "$REPOS_ROOT"
-if ! tmpfile="$REPOS_ROOT/.permtest.$$"; : >"$tmpfile" 2>/dev/null; then
+tmpfile="$REPOS_ROOT/.permtest.$$"
+# Use a straightforward touch check to verify writeability; the previous compound
+# syntax could mis-evaluate under different shells.
+if ! touch "$tmpfile" 2>/dev/null; then
   echo "Error: '$REPOS_ROOT' is not writable. Ensure a Docker named volume is mounted at $REPOS_ROOT with permissions for the runtime user." >&2
+  echo "Debug: attempted to create $tmpfile and failed." >&2
   exit 1
 fi
 rm -f "$tmpfile" || true
+
+# Logging helper
+LOGFILE="${REPOS_ROOT}/../secure-clone.log"
+log() {
+  local ts
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  printf '%s %s\n' "$ts" "$*" >>"${LOGFILE}" 2>/dev/null || true
+}
+log "secure-clone started. REPOS_ROOT=$REPOS_ROOT"
 
 cd "$REPOS_ROOT"
 
@@ -143,21 +163,23 @@ clone_or_update() {
   mkdir -p "$dest"
   cd "$dest"
   if [[ -d .git ]]; then
-    echo "[$name] Updating existing repo..." >&2
+  log "[$name] Updating existing repo..."
     local origin
     origin=$(git remote get-url origin 2>/dev/null || echo "")
     if [[ -n "$origin" && "$origin" != *"$name"* && "$origin" != *"$url"* ]]; then
       if [[ "${GIT_FORCE_RECLONE:-}" == "1" ]]; then
-        echo "[$name] Origin mismatch. Re-cloning due to GIT_FORCE_RECLONE=1" >&2
+        log "[$name] Origin mismatch. Re-cloning due to GIT_FORCE_RECLONE=1"
         cd "$REPOS_ROOT"
         rm -rf "$dest"
         git -c credential.helper= -c core.askpass="$GIT_ASKPASS_SCRIPT" clone --branch "$branch" "$url" "$dest"
       else
-        echo "[$name] Origin ($origin) does not match ($url). Set GIT_FORCE_RECLONE=1 to replace." >&2
+        log "[$name] Origin ($origin) does not match ($url). Set GIT_FORCE_RECLONE=1 to replace."
         cd "$REPOS_ROOT"; return 1
       fi
     else
-      git remote set-url origin "$url" || true
+  # Ensure Git treats this working tree as safe even if ownership differs
+  git config --global --add safe.directory "$dest" 2>/dev/null || true
+  git remote set-url origin "$url" || true
       git fetch --all --prune
       if git show-ref --verify --quiet "refs/heads/$branch"; then
         git checkout "$branch"
@@ -170,14 +192,18 @@ clone_or_update() {
   else
     if [[ -n "$(ls -A "$dest" 2>/dev/null || true)" ]]; then
       if [[ "${GIT_FORCE_RECLONE:-}" == "1" ]]; then
-        echo "[$name] Non-git dir not empty. Re-cloning due to GIT_FORCE_RECLONE=1" >&2
+        log "[$name] Non-git dir not empty. Re-cloning due to GIT_FORCE_RECLONE=1"
         rm -rf "$dest"
       else
-        echo "[$name] Destination exists and is not a git repo. Set GIT_FORCE_RECLONE=1 to replace." >&2
+        log "[$name] Destination exists and is not a git repo. Set GIT_FORCE_RECLONE=1 to replace."
         cd "$REPOS_ROOT"; return 1
       fi
     fi
-    git -c credential.helper= -c core.askpass="$GIT_ASKPASS_SCRIPT" clone --branch "$branch" "$url" "$dest"
+  log "Cloning $url -> $dest"
+  git -c credential.helper= -c core.askpass="$GIT_ASKPASS_SCRIPT" clone --branch "$branch" "$url" "$dest"
+  # After clone, mark working tree safe for the user that may operate on it
+  git -C "$dest" config --global --add safe.directory "$dest" 2>/dev/null || true
+  log "Cloned $name"
     cd "$REPOS_ROOT"
   fi
 }
@@ -199,7 +225,9 @@ for ref in "${REFS[@]}"; do
   export GIT_USERNAME_VALUE
 
   NAME="$(repo_name_from_ref "$ref")"
+  log "processing ref=$ref NAME=$NAME REPO_URL=$REPO_URL"
   clone_or_update "$REPO_URL" "$NAME" "$GIT_BRANCH"
 done
 
 unset TOKEN GIT_TOKEN GIT_USERNAME_VALUE
+log "secure-clone finished"

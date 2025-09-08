@@ -11,14 +11,31 @@ export PATH="/home/devuser/.local/bin:$PATH"
 # Default location for secret token file unless overridden via env
 export GIT_TOKEN_FILE=${GIT_TOKEN_FILE:-/run/secrets/git_token}
 PROJECT_DIR=${PROJECT_DIR:-/workspace}
+LOGFILE="${PROJECT_DIR}/entrypoint.log"
+
+# Simple logger: timestamp to both stderr and log file (if writable)
+log() {
+  local ts
+  ts=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+  printf '%s %s\n' "$ts" "$*" >&2
+  if [[ -d "${PROJECT_DIR}" ]]; then
+    printf '%s %s\n' "$ts" "$*" >>"${LOGFILE}" 2>/dev/null || true
+  fi
+}
+
+trap 'log "entrypoint exit code:$?"' EXIT
 
 # If running as root (e.g., via compose user: root), ensure /workspace is writable by devuser and drop to devuser
 if [[ "$(id -u)" == "0" && "${ENTRYPOINT_AS_DEVUSER:-}" != "1" ]]; then
   mkdir -p "$PROJECT_DIR"
   chown -R devuser:devuser "$PROJECT_DIR" || true
-  # Re-exec this entrypoint as devuser with the same args, preserving env
+  log "chowned $PROJECT_DIR to devuser"
+  # Re-exec this entrypoint as devuser with the same args. Pass variables to
+  # disable the Powerlevel10k configuration wizard in case a zsh session
+  # is started during setup.
   printf -v _argv '%q ' "$@"
-  exec su -p -l devuser -c "ENTRYPOINT_AS_DEVUSER=1 /usr/local/bin/entrypoint.sh ${_argv}"
+  log "re-exec as devuser with ENTRYPOINT_AS_DEVUSER=1"
+  exec su -p -l devuser -c "ENTRYPOINT_AS_DEVUSER=1 POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=1 POWERLEVEL10K_DISABLE_CONFIGURATION_WIZARD=1 /usr/local/bin/entrypoint.sh ${_argv}"
 fi
 
 cd "$PROJECT_DIR"
@@ -71,25 +88,50 @@ else
   echo 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' >> "$ZSHRC"
 fi
 
-# Enable pyenv and pipx in .zshrc if not already present
-if ! grep -q 'pyenv init' "$ZSHRC"; then
-  echo '' >> "$ZSHRC"
-  echo '# Pyenv initialization' >> "$ZSHRC"
-  echo 'export PYENV_ROOT="$HOME/.pyenv"' >> "$ZSHRC"
-  echo 'export PATH="$PYENV_ROOT/bin:$PATH"' >> "$ZSHRC"
-  echo 'eval "$(pyenv init --path)"' >> "$ZSHRC"
-  echo 'eval "$(pyenv init -)"' >> "$ZSHRC"
+# Ensure Powerlevel10k config is sourced to avoid interactive wizard
+if ! grep -q 'source ~/.p10k.zsh' "$ZSHRC"; then
+  echo '[[ -r ~/.p10k.zsh ]] && source ~/.p10k.zsh' >> "$ZSHRC"
 fi
+
+# Enable pyenv and pipx in .zshrc if not already present (idempotent)
+if ! grep -q 'PYENV_ROOT' "$ZSHRC"; then
+  cat >> "$ZSHRC" <<'ZSH_CFG'
+
+# Pyenv initialization
+export PYENV_ROOT="$HOME/.pyenv"
+export PATH="$PYENV_ROOT/bin:$PATH"
+if command -v pyenv >/dev/null 2>&1; then
+  eval "$(pyenv init --path)"
+  eval "$(pyenv init -)"
+fi
+ZSH_CFG
+fi
+
 if ! grep -q 'pipx' "$ZSHRC"; then
-  echo '' >> "$ZSHRC"
-  echo '# Pipx initialization' >> "$ZSHRC"
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$ZSHRC"
+  cat >> "$ZSHRC" <<'ZSH_PIPX'
+
+# Pipx initialization
+export PATH="$HOME/.local/bin:$PATH"
+ZSH_PIPX
+fi
+
+# Create a minimal Powerlevel10k config to prevent the interactive wizard from running
+P10K_CONF_DIR="/home/devuser/.p10k.zsh"
+if [[ ! -f "/home/devuser/.p10k.zsh" ]]; then
+  cat > "/home/devuser/.p10k.zsh" <<'P10K_MIN'
+# Minimal Powerlevel10k config to avoid interactive setup in containers
+typeset -g POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=1
+POWERLEVEL9K_LEFT_PROMPT_ELEMENTS=(user dir vcs)
+POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS=()
+P10K_MIN
+  chown devuser:devuser "/home/devuser/.p10k.zsh" || true
 fi
 
 # Optional: secure git clone before setup
 if [[ -n "${GIT_REPO:-}" || -n "${GIT_URL:-}" || -n "${GIT_REPOS:-}" ]]; then
   if [[ -x "/usr/local/bin/secure-clone.sh" ]]; then
-    /usr/local/bin/secure-clone.sh
+    log "running secure-clone.sh"
+    /usr/local/bin/secure-clone.sh || log "secure-clone.sh exited with $?"
   elif [[ -f "./secure-clone.sh" ]]; then
     # If the script isn't executable or the mount is noexec, run via bash
     if [[ -x "./secure-clone.sh" ]]; then
@@ -102,16 +144,95 @@ if [[ -n "${GIT_REPO:-}" || -n "${GIT_URL:-}" || -n "${GIT_REPOS:-}" ]]; then
   fi
 fi
 
-if [[ -f "pyproject.toml" ]]; then
-  echo "Poetry project detected. Ensuring virtualenv and dependencies..."
-  # Create the venv if missing
-  poetry env use python || true
-  # Install dependencies with no cache and no interaction. Respect optional groups via POETRY_GROUPS
-  if [[ -n "${POETRY_GROUPS:-}" ]]; then
-    poetry install --no-interaction --no-ansi --no-root --with "$POETRY_GROUPS"
-  else
-    poetry install --no-interaction --no-ansi --no-root
+# If no pyproject in current PROJECT_DIR, but exactly one repo under $PROJECT_DIR/repos
+# has a pyproject.toml, switch PROJECT_DIR into that repo to enable Poetry setup.
+if [[ ! -f "pyproject.toml" ]]; then
+  if [[ -d "$PROJECT_DIR/repos" ]]; then
+    # Find up to two candidates to detect uniqueness
+    mapfile -t _pyprojects < <(find "$PROJECT_DIR/repos" -mindepth 2 -maxdepth 2 -type f -name pyproject.toml 2>/dev/null | head -n 2)
+    if [[ ${#_pyprojects[@]} -eq 1 ]]; then
+      _newdir="$(dirname "${_pyprojects[0]}")"
+      log "switching PROJECT_DIR to $_newdir"
+      PROJECT_DIR="$_newdir"; export PROJECT_DIR
+      cd "$PROJECT_DIR" || log "failed to cd into $_newdir"
+    elif [[ ${#_pyprojects[@]} -gt 1 ]]; then
+      log "multiple pyproject.toml found under $PROJECT_DIR/repos; staying in $PROJECT_DIR"
+    fi
   fi
 fi
 
-exec "$@"
+if [[ -f "pyproject.toml" ]]; then
+  log "Poetry project detected. Ensuring virtualenv and dependencies..."
+  # Temporarily relax 'set -e' so failures here don't kill the entrypoint
+  set +e
+  # Create the venv if missing
+  poetry env use python || true
+  # Install dependencies with no cache and no interaction. Respect optional groups via POETRY_GROUPS
+  POETRY_AUTO_RELOCK=${POETRY_AUTO_RELOCK:-1}
+  install_args=(--no-interaction --no-ansi --no-root)
+  if [[ -n "${POETRY_GROUPS:-}" ]]; then
+    install_args+=(--with "$POETRY_GROUPS")
+  fi
+  if poetry install "${install_args[@]}"; then
+    :
+  else
+    rc=$?
+    log "poetry install failed with code $rc; attempting lock regeneration (POETRY_AUTO_RELOCK=$POETRY_AUTO_RELOCK)"
+    if [[ "$POETRY_AUTO_RELOCK" == "1" ]]; then
+      poetry lock --no-interaction --no-ansi --no-update || poetry lock --no-interaction --no-ansi || true
+      if poetry install "${install_args[@]}"; then
+        :
+      else
+        rc2=$?
+        log "poetry install still failing after relock (code $rc2); continuing without blocking shell"
+      fi
+    else
+      log "skipping auto relock per POETRY_AUTO_RELOCK=0"
+    fi
+  fi
+  # Reinstate 'set -e'
+  set -e
+fi
+
+# Optionally supervise the final command to auto-restart on transient errors.
+# Set ENABLE_SUPERVISOR=1 to enable, SUPERVISOR_MAX_RETRIES and SUPERVISOR_BASE_BACKOFF
+# control behavior (defaults below).
+ENABLE_SUPERVISOR=${ENABLE_SUPERVISOR:-0}
+SUPERVISOR_MAX_RETRIES=${SUPERVISOR_MAX_RETRIES:-5}
+SUPERVISOR_BASE_BACKOFF=${SUPERVISOR_BASE_BACKOFF:-1}
+
+# If the target command is an interactive shell, disable supervisor to avoid
+# immediate exit/restarts when the shell exits cleanly.
+if [[ "$ENABLE_SUPERVISOR" == "1" ]]; then
+  case "${1:-}" in
+    */zsh|zsh|*/bash|bash)
+      log "interactive shell detected ($1); disabling supervisor"
+      ENABLE_SUPERVISOR=0
+      ;;
+  esac
+fi
+
+if [[ "$ENABLE_SUPERVISOR" == "1" ]]; then
+  attempt=0
+  while true; do
+    attempt=$((attempt+1))
+    log "supervisor: starting attempt $attempt: $*"
+    "$@"
+    rc=$?
+    log "supervisor: command exited with code $rc"
+    if [[ $rc -eq 0 ]]; then
+      log "supervisor: command exited cleanly; exiting supervisor"
+      exit 0
+    fi
+    if [[ $attempt -ge $SUPERVISOR_MAX_RETRIES ]]; then
+      log "supervisor: reached max retries ($SUPERVISOR_MAX_RETRIES); aborting"
+      exit $rc
+    fi
+    # Exponential backoff
+    backoff=$((SUPERVISOR_BASE_BACKOFF * (2 ** (attempt-1))))
+    log "supervisor: sleeping ${backoff}s before retry"
+    sleep $backoff
+  done
+else
+  exec "$@"
+fi
