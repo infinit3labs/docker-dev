@@ -6,7 +6,7 @@ Auto build on Dockerhub enabled.
 
 ## What you get
 
-- Ubuntu 24.04 base, non-root user (devuser)
+- Ubuntu 24.04 base, runs as root
 - Python via pyenv (3.12.x), Poetry with in-project venvs
 - Node.js (pinned major), OpenJDK 21, Apache Spark
 - Azure CLI, Oracle Instant Client

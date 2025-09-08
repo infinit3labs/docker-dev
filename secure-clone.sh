@@ -162,7 +162,7 @@ REFS=("${clean_refs[@]}")
 # Avoid leaking token in process listings by using env var expansion inside URL
 # Using git -c to avoid writing credentials to config
 GIT_BRANCH="${GIT_BRANCH:-main}"
-GIT_ASKPASS_SCRIPT=$(mktemp -p "${HOME:-/home/devuser}")
+GIT_ASKPASS_SCRIPT=$(mktemp -p "${HOME:-/root}")
 trap 'rm -f "$GIT_ASKPASS_SCRIPT"' EXIT
 
 USERNAME_DEFAULT="x-access-token"  # GitHub accepts this with PATs; override via GIT_USERNAME

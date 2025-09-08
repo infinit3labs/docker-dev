@@ -2,6 +2,7 @@ services:
   dev:
     image: "${IMAGE_NAME:-}"
     platform: linux/amd64
+    user: root
     env_file:
       - .env
     environment:

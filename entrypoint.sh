@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Entry point for safe Poetry environment setup
-# - Fixes /workspace permissions if starting as root, then re-execs as devuser
+# - Runs entirely as root
 # - Creates/updates the venv inside the project (.venv) if pyproject.toml exists
 # - Installs dependencies without using cache
 # - Avoids storing secrets or tokens in image layers
 
-export PATH="/home/devuser/.local/bin:$PATH"
+export PATH="/root/.local/bin:$PATH"
 # Default location for secret token file unless overridden via env
 export GIT_TOKEN_FILE=${GIT_TOKEN_FILE:-/run/secrets/git_token}
 PROJECT_DIR=${PROJECT_DIR:-/workspace}
@@ -25,22 +25,11 @@ log() {
 
 trap 'log "entrypoint exit code:$?"' EXIT
 
-# If running as root (e.g., via compose user: root), ensure /workspace is writable by devuser and drop to devuser
-if [[ "$(id -u)" == "0" && "${ENTRYPOINT_AS_DEVUSER:-}" != "1" ]]; then
-  mkdir -p "$PROJECT_DIR"
-  chown -R devuser:devuser "$PROJECT_DIR" || true
-  log "chowned $PROJECT_DIR to devuser"
-  # Re-exec this entrypoint as devuser with the same args. Pass variables to
-  # disable the Powerlevel10k configuration wizard in case a zsh session
-  # is started during setup.
-  printf -v _argv '%q ' "$@"
-  log "re-exec as devuser with ENTRYPOINT_AS_DEVUSER=1"
-  exec su -p -l devuser -c "ENTRYPOINT_AS_DEVUSER=1 POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=1 POWERLEVEL10K_DISABLE_CONFIGURATION_WIZARD=1 /usr/local/bin/entrypoint.sh ${_argv}"
-fi
+mkdir -p "$PROJECT_DIR"
 
 cd "$PROJECT_DIR"
 
-# Configure global Git options (idempotent, runs as devuser)
+# Configure global Git options (idempotent)
 if command -v git >/dev/null 2>&1; then
   log "configuring global git settings"
   git_conf_set() {
@@ -93,8 +82,8 @@ ZSHAUTO_REF="${ZSHAUTO_REF:-master}"
 ZSHHL_REPO="${ZSHHL_REPO:-https://github.com/zsh-users/zsh-syntax-highlighting.git}"
 ZSHHL_REF="${ZSHHL_REF:-master}"
 
-ZSH_DIR="/home/devuser/.oh-my-zsh"
-ZSHRC="/home/devuser/.zshrc"
+ZSH_DIR="/root/.oh-my-zsh"
+ZSHRC="/root/.zshrc"
 
 # Only install if not already present
 if [[ ! -d "$ZSH_DIR" ]]; then
@@ -159,15 +148,15 @@ ZSH_PIPX
 fi
 
 # Create a minimal Powerlevel10k config to prevent the interactive wizard from running
-P10K_CONF_DIR="/home/devuser/.p10k.zsh"
-if [[ ! -f "/home/devuser/.p10k.zsh" ]]; then
-  cat > "/home/devuser/.p10k.zsh" <<'P10K_MIN'
+P10K_CONF_DIR="/root/.p10k.zsh"
+if [[ ! -f "/root/.p10k.zsh" ]]; then
+  cat > "/root/.p10k.zsh" <<'P10K_MIN'
 # Minimal Powerlevel10k config to avoid interactive setup in containers
 typeset -g POWERLEVEL9K_DISABLE_CONFIGURATION_WIZARD=1
 POWERLEVEL9K_LEFT_PROMPT_ELEMENTS=(user dir vcs)
 POWERLEVEL9K_RIGHT_PROMPT_ELEMENTS=()
 P10K_MIN
-  chown devuser:devuser "/home/devuser/.p10k.zsh" || true
+  # Running as root; no chown needed
 fi
 
 # Optional: secure git clone before setup

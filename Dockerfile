@@ -20,6 +20,7 @@ RUN set -eux; \
       gnupg \
       lsb-release \
       unzip \
+      nano \
       wget \
       zsh \
       pipx \
@@ -134,7 +135,7 @@ RUN --mount=type=cache,target=/download_cache,id=download_cache \
 ENV LD_LIBRARY_PATH=/opt/oracle
 
 
-# -------- Final stage: minimal runtime, non-root --------
+# -------- Final stage: minimal runtime (root) --------
 FROM --platform=linux/amd64 ubuntu:24.04
 
 # Copy only what is needed from builder
@@ -142,25 +143,21 @@ COPY --from=builder /opt /opt
 COPY --from=builder /usr /usr
 COPY --from=builder /etc/ld.so.conf.d/oracle.conf /etc/ld.so.conf.d/oracle.conf
 
-# Create non-root user and prepare writable dirs
+# Prepare writable dirs
 RUN set -eux; \
-    groupadd -r devuser; \
-    useradd -r -g devuser -m -s /bin/zsh devuser; \
-    mkdir -p /workspace /workspace/repos /home/devuser/.cache/pypoetry /home/devuser/.cache/pip; \
-    chown -R devuser:devuser /workspace /home/devuser/.cache; \
+    mkdir -p /workspace /workspace/repos /root/.cache/pypoetry /root/.cache/pip; \
     chmod 0775 /workspace /workspace/repos || true; \
     ldconfig
 
 ARG POETRY_VERSION=2.1.4
-USER devuser
 WORKDIR /workspace
 
-# Minimal, explicit PATH and env
-ENV PATH=/opt/pyenv/shims:/opt/pyenv/bin:/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/home/devuser/.local/bin \
+# Minimal, explicit PATH and env (root)
+ENV PATH=/opt/pyenv/shims:/opt/pyenv/bin:/opt/spark/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/.local/bin \
     PYTHONPATH=/workspace \
     LD_LIBRARY_PATH=/opt/oracle \
-    POETRY_CACHE_DIR=/home/devuser/.cache/pypoetry \
-    PIP_CACHE_DIR=/home/devuser/.cache/pip \
+    POETRY_CACHE_DIR=/root/.cache/pypoetry \
+    PIP_CACHE_DIR=/root/.cache/pip \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONHASHSEED=random \
@@ -171,21 +168,19 @@ ENV PATH=/opt/pyenv/shims:/opt/pyenv/bin:/opt/spark/bin:/usr/local/sbin:/usr/loc
 ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
 ENV PATH=$JAVA_HOME/bin:$PATH
 
-# Ensure SSL certs are up to date (no sudo; run as root)
-USER root
+# Ensure SSL certs are up to date
 RUN set -eux; \
     apt-get update; \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends --reinstall ca-certificates; \
     update-ca-certificates; \
     rm -rf /var/lib/apt/lists/*
-USER devuser
 
-# Install Poetry and Azure CLI for the runtime user (pinned Poetry)
+# Install Poetry and Azure CLI for root (pinned Poetry)
 RUN pipx ensurepath \
     && pipx install "poetry==${POETRY_VERSION}" \
     && pipx install azure-cli \
     && poetry config virtualenvs.in-project false \
-    && poetry config virtualenvs.path /home/devuser/.cache/pypoetry/virtualenvs \
+    && poetry config virtualenvs.path /root/.cache/pypoetry/virtualenvs \
     && poetry config virtualenvs.create true \
     && poetry config installer.parallel true
 
