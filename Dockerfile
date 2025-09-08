@@ -186,30 +186,6 @@ RUN pipx ensurepath \
     && poetry config virtualenvs.create true \
     && poetry config installer.parallel true
 
-# Oh My Zsh and extras for devuser (without curl|sh). Optional refs can be pinned via build args.
-ARG OHMYZSH_REPO=https://github.com/ohmyzsh/ohmyzsh.git
-ARG OHMYZSH_REF=master
-ARG P10K_REPO=https://github.com/romkatv/powerlevel10k.git
-ARG P10K_REF=master
-ARG ZSHAUTO_REPO=https://github.com/zsh-users/zsh-autosuggestions.git
-ARG ZSHAUTO_REF=master
-ARG ZSHHL_REPO=https://github.com/zsh-users/zsh-syntax-highlighting.git
-ARG ZSHHL_REF=master
-
-RUN set -eux; \
-        export ZSH_DIR="/home/devuser/.oh-my-zsh"; \
-        git clone --depth 1 --branch "$OHMYZSH_REF" "$OHMYZSH_REPO" "$ZSH_DIR"; \
-        if [ ! -f "/home/devuser/.zshrc" ]; then cp "$ZSH_DIR/templates/zshrc.zsh-template" "/home/devuser/.zshrc"; fi; \
-        mkdir -p "$ZSH_DIR/custom/themes" "$ZSH_DIR/custom/plugins"; \
-        git clone --depth 1 --branch "$P10K_REF" "$P10K_REPO" "$ZSH_DIR/custom/themes/powerlevel10k"; \
-        git clone --depth 1 --branch "$ZSHAUTO_REF" "$ZSHAUTO_REPO" "$ZSH_DIR/custom/plugins/zsh-autosuggestions"; \
-        git clone --depth 1 --branch "$ZSHHL_REF" "$ZSHHL_REPO" "$ZSH_DIR/custom/plugins/zsh-syntax-highlighting"; \
-        sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|g' /home/devuser/.zshrc; \
-        if grep -q '^plugins=' /home/devuser/.zshrc; then \
-            sed -i 's|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|g' /home/devuser/.zshrc; \
-        else \
-            echo 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' >> /home/devuser/.zshrc; \
-        fi
 
 # Copy entrypoint script with executable permissions set at build time
 # Copy runtime scripts with executable permissions set at build time

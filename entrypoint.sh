@@ -23,6 +23,54 @@ fi
 
 cd "$PROJECT_DIR"
 
+# Unattended Oh My Zsh and plugin installation (idempotent)
+OHMYZSH_REPO="${OHMYZSH_REPO:-https://github.com/ohmyzsh/ohmyzsh.git}"
+OHMYZSH_REF="${OHMYZSH_REF:-master}"
+P10K_REPO="${P10K_REPO:-https://github.com/romkatv/powerlevel10k.git}"
+P10K_REF="${P10K_REF:-master}"
+ZSHAUTO_REPO="${ZSHAUTO_REPO:-https://github.com/zsh-users/zsh-autosuggestions.git}"
+ZSHAUTO_REF="${ZSHAUTO_REF:-master}"
+ZSHHL_REPO="${ZSHHL_REPO:-https://github.com/zsh-users/zsh-syntax-highlighting.git}"
+ZSHHL_REF="${ZSHHL_REF:-master}"
+
+ZSH_DIR="/home/devuser/.oh-my-zsh"
+ZSHRC="/home/devuser/.zshrc"
+
+# Only install if not already present
+if [[ ! -d "$ZSH_DIR" ]]; then
+  git clone --depth 1 --branch "$OHMYZSH_REF" "$OHMYZSH_REPO" "$ZSH_DIR"
+fi
+if [[ ! -f "$ZSHRC" ]]; then
+  cp "$ZSH_DIR/templates/zshrc.zsh-template" "$ZSHRC"
+fi
+mkdir -p "$ZSH_DIR/custom/themes" "$ZSH_DIR/custom/plugins"
+
+# Powerlevel10k theme (defer config wizard)
+if [[ ! -d "$ZSH_DIR/custom/themes/powerlevel10k" ]]; then
+  git clone --depth 1 --branch "$P10K_REF" "$P10K_REPO" "$ZSH_DIR/custom/themes/powerlevel10k"
+fi
+# zsh-autosuggestions
+if [[ ! -d "$ZSH_DIR/custom/plugins/zsh-autosuggestions" ]]; then
+  git clone --depth 1 --branch "$ZSHAUTO_REF" "$ZSHAUTO_REPO" "$ZSH_DIR/custom/plugins/zsh-autosuggestions"
+fi
+# zsh-syntax-highlighting
+if [[ ! -d "$ZSH_DIR/custom/plugins/zsh-syntax-highlighting" ]]; then
+  git clone --depth 1 --branch "$ZSHHL_REF" "$ZSHHL_REPO" "$ZSH_DIR/custom/plugins/zsh-syntax-highlighting"
+fi
+
+# Set theme to powerlevel10k but do NOT run p10k configure (defer to user login)
+if grep -q '^ZSH_THEME=' "$ZSHRC"; then
+  sed -i 's|^ZSH_THEME=.*|ZSH_THEME="powerlevel10k/powerlevel10k"|g' "$ZSHRC"
+else
+  echo 'ZSH_THEME="powerlevel10k/powerlevel10k"' >> "$ZSHRC"
+fi
+# Set plugins (idempotent)
+if grep -q '^plugins=' "$ZSHRC"; then
+  sed -i 's|^plugins=.*|plugins=(git zsh-autosuggestions zsh-syntax-highlighting)|g' "$ZSHRC"
+else
+  echo 'plugins=(git zsh-autosuggestions zsh-syntax-highlighting)' >> "$ZSHRC"
+fi
+
 # Optional: secure git clone before setup
 if [[ -n "${GIT_REPO:-}" || -n "${GIT_URL:-}" || -n "${GIT_REPOS:-}" ]]; then
   if [[ -x "/usr/local/bin/secure-clone.sh" ]]; then
