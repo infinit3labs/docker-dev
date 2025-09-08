@@ -1,0 +1,3 @@
+literal:GIT_REPO="${GIT_REPO:-}"==>GIT_REPO="${GIT_REPO:-}"
+literal:IMAGE_NAME="${IMAGE_NAME:-}"==>IMAGE_NAME="${IMAGE_NAME:-}"
+literal:image: "${IMAGE_NAME:-}"==>image: "${IMAGE_NAME:-}"

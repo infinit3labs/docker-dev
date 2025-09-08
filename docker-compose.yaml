@@ -1,7 +1,9 @@
 services:
-  dp-databricks-application:
+  dev:
     image: "${IMAGE_NAME:-}"
     platform: linux/amd64
+    env_file:
+      - .env
     environment:
       - IMAGE_NAME="${IMAGE_NAME:-}"
       - GIT_TOKEN_FILE=/run/secrets/git_token
