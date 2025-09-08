@@ -38,7 +38,10 @@ RUN set -eux; \
       libxmlsec1-dev \
       libffi-dev \
       liblzma-dev; \
-    rm -rf /var/lib/apt/lists/*; \
+    rm -rf /var/lib/apt/lists/*
+
+RUN set -eux; \
+    if [ -d .certs ] && [ "$(ls -A .certs)" ]; then cp .certs/* /usr/local/share/ca-certificates/; fi; \
     pipx ensurepath; \
     update-ca-certificates
 

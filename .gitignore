@@ -19,3 +19,6 @@ workspace/
 # Docker backups and archives
 backups/
 *.tar
+
+# Internal
+.certs/
