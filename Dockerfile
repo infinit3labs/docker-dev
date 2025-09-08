@@ -7,7 +7,7 @@ FROM --platform=linux/amd64 ubuntu:24.04 AS builder
 ARG PYTHON_VERSION=3.12.3
 ARG SPARK_VERSION=4.0.0
 ARG NODE_MAJOR=22
-ARG POETRY_VERSION=1.8.4
+ARG POETRY_VERSION=2.1.4
 
 # System packages (build + runtime libs). Keep minimal and clean up.
 RUN set -eux; \
