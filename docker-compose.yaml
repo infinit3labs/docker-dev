@@ -9,7 +9,7 @@ services:
       IMAGE_NAME: ${IMAGE_NAME:-local/spark-uc:latest}
       GIT_TOKEN_FILE: /run/secrets/git_token
       GIT_REPO: ${GIT_REPO:-}
-      GIT_BRANCH: main
+      GIT_BRANCH: feature/91472_extract_prototype
       GIT_USERNAME: azdo
       ENABLE_SUPERVISOR: "1"
       SUPERVISOR_MAX_RETRIES: "3"

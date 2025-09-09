@@ -24,6 +24,8 @@ RUN set -eux; \
       wget \
       zsh \
       pipx \
+	  unixodbc \
+	  unixodbc-dev \
       fonts-powerline \
       build-essential \
       libssl-dev \
