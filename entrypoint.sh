@@ -226,6 +226,59 @@ if [[ -f "pyproject.toml" ]]; then
   set -e
 fi
 
+# --- UC-like Spark bootstrap (insert before supervisor logic) ---
+UC_CATALOG="${UC_CATALOG:-local}"
+UC_SCHEMA="${UC_SCHEMA:-dev}"
+UC_WAREHOUSE="${UC_WAREHOUSE:-/workspace/warehouse}"
+SPARK_BOOTSTRAP_UC="${SPARK_BOOTSTRAP_UC:-true}"
+UC_DRY_RUN="${UC_DRY_RUN:-false}"
+
+if [[ "${SPARK_BOOTSTRAP_UC}" == "true" ]]; then
+  if command -v spark-sql >/dev/null 2>&1; then
+    log "[uc-bootstrap] Preparing UC-like catalog '${UC_CATALOG}.${UC_SCHEMA}'"
+
+    # Ensure warehouse dir exists
+    mkdir -p "${UC_WAREHOUSE}"
+
+    # Patch spark-defaults.conf to point to runtime warehouse
+    SD_CONF="/opt/spark/conf/spark-defaults.conf"
+    if [[ -f "$SD_CONF" ]]; then
+      if grep -q "^spark.sql.catalog.${UC_CATALOG}.warehouse=" "$SD_CONF"; then
+        sed -i "s|^spark.sql.catalog.${UC_CATALOG}.warehouse=.*|spark.sql.catalog.${UC_CATALOG}.warehouse=file://${UC_WAREHOUSE}|g" "$SD_CONF"
+      else
+        echo "spark.sql.catalog.${UC_CATALOG}.warehouse=file://${UC_WAREHOUSE}" >> "$SD_CONF"
+      fi
+    fi
+
+    # Build bootstrap SQL
+    read -r -d '' SQL <<EOF || true
+CREATE NAMESPACE IF NOT EXISTS ${UC_CATALOG}.${UC_SCHEMA};
+CREATE TABLE IF NOT EXISTS ${UC_CATALOG}.${UC_SCHEMA}.uc_smoke_test (id INT, name STRING) USING delta;
+MERGE INTO ${UC_CATALOG}.${UC_SCHEMA}.uc_smoke_test AS t
+USING (SELECT 1 AS id, 'ok' AS name) AS s
+ON t.id = s.id
+WHEN NOT MATCHED THEN INSERT (id, name) VALUES (s.id, s.name);
+EOF
+
+    log "[uc-bootstrap] SQL to run:"
+    log "----------------------------------------"
+    log "${SQL}"
+    log "----------------------------------------"
+
+    if [[ "${UC_DRY_RUN}" != "true" ]]; then
+      spark-sql -S -e "${SQL}" || log "[uc-bootstrap] spark-sql execution failed"
+    else
+      log "[uc-bootstrap] Dry run enabled; skipping execution"
+    fi
+  else
+    log "[uc-bootstrap] spark-sql not found; skipping UC bootstrap"
+  fi
+else
+  log "[uc-bootstrap] SPARK_BOOTSTRAP_UC=false; skipping UC bootstrap"
+fi
+
+# --- end UC-like Spark bootstrap ---
+
 # Optionally supervise the final command to auto-restart on transient errors.
 # Set ENABLE_SUPERVISOR=1 to enable, SUPERVISOR_MAX_RETRIES and SUPERVISOR_BASE_BACKOFF
 # control behavior (defaults below).

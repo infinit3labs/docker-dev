@@ -46,7 +46,6 @@ RUN set -eux; \
     pipx ensurepath; \
     update-ca-certificates
 
-
 # pyenv (pin tag) and Python toolchain
 ENV PYENV_ROOT=/opt/pyenv
 ENV PATH=$PYENV_ROOT/shims:$PYENV_ROOT/bin:$PATH
@@ -107,15 +106,12 @@ ENV PATH=$PATH:$SPARK_HOME/bin:$SPARK_HOME/sbin
 ENV PYSPARK_PYTHON=python PYSPARK_DRIVER_PYTHON=python
 
 # Poetry (pin)
-RUN pipx install "poetry==${POETRY_VERSION}";
+RUN pipx install "poetry==${POETRY_VERSION}"
 
 # Azure CLI: install via pipx to avoid repo dependency issues on Ubuntu 24.04
-# This keeps the builder image lean and avoids "held broken packages" from apt.
 RUN pipx install azure-cli
 
 # Oracle Instant Client (amd64/x64) and configure loader
-# Notes:
-# - Pinned version and directory IDs for reproducibility.
 ARG ORACLE_VERSION=21.19.0.0.0dbru
 ARG ORACLE_DIR_ID=2119000
 RUN --mount=type=cache,target=/download_cache,id=download_cache \
@@ -134,6 +130,14 @@ RUN --mount=type=cache,target=/download_cache,id=download_cache \
         ldconfig
 ENV LD_LIBRARY_PATH=/opt/oracle
 
+# ---- Add Delta Lake JARs for Spark V2 catalog (UC-like 3-part namespace) ----
+ARG DELTA_VERSION=3.2.1
+RUN --mount=type=cache,target=/download_cache,id=download_cache \
+    set -eux; \
+    cd /download_cache; \
+    wget -q "https://repo1.maven.org/maven2/io/delta/delta-spark_2.12/${DELTA_VERSION}/delta-spark_2.12-${DELTA_VERSION}.jar"; \
+    mkdir -p /opt/spark/jars; \
+    cp delta-spark_2.12-${DELTA_VERSION}.jar /opt/spark/jars/
 
 # -------- Final stage: minimal runtime (root) --------
 FROM --platform=linux/amd64 ubuntu:24.04
@@ -145,8 +149,8 @@ COPY --from=builder /etc/ld.so.conf.d/oracle.conf /etc/ld.so.conf.d/oracle.conf
 
 # Prepare writable dirs
 RUN set -eux; \
-    mkdir -p /workspace /workspace/repos /root/.cache/pypoetry /root/.cache/pip; \
-    chmod 0775 /workspace /workspace/repos || true; \
+    mkdir -p /workspace /workspace/repos /root/.cache/pypoetry /root/.cache/pip /workspace/warehouse; \
+    chmod 0775 /workspace /workspace/repos /workspace/warehouse || true; \
     ldconfig
 
 ARG POETRY_VERSION=2.1.4
@@ -184,9 +188,12 @@ RUN pipx ensurepath \
     && poetry config virtualenvs.create true \
     && poetry config installer.parallel true
 
+# Spark defaults for local UC-like catalog (copy in and allow runtime overrides)
+RUN mkdir -p /opt/spark/conf
+COPY spark-defaults.conf /opt/spark/conf/spark-defaults.conf
 
-# Copy entrypoint script with executable permissions set at build time
-# Copy runtime scripts with executable permissions set at build time
+# UC-like bootstrap and entry scripts
+COPY --chmod=0755 bootstrap-uc.sh /usr/local/bin/bootstrap-uc.sh
 COPY --chmod=0755 entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY --chmod=0755 secure-clone.sh /usr/local/bin/secure-clone.sh
 
@@ -194,6 +201,13 @@ COPY --chmod=0755 secure-clone.sh /usr/local/bin/secure-clone.sh
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
   CMD python --version || exit 1
 
-# Entrypoint ensures Poetry env setup; default command opens zsh
+# UC-like runtime env: configurable catalog, schema, and warehouse
+ENV UC_CATALOG=local \
+    UC_SCHEMA=dev \
+    UC_WAREHOUSE=/workspace/warehouse \
+    SPARK_BOOTSTRAP_UC=true \
+    UC_DRY_RUN=false
+
+# Entrypoint ensures Poetry env setup and UC bootstrap; default command opens zsh
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/bin/zsh", "-l"]

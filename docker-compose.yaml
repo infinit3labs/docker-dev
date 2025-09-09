@@ -1,12 +1,12 @@
 services:
-  dev:
-    image: "${IMAGE_NAME:-}"
+  dev_new:
+    image: "${IMAGE_NAME:-local/spark-uc:latest}"   # default to UC-enabled image
     platform: linux/amd64
     user: root
     env_file:
       - .env
     environment:
-      IMAGE_NAME: ${IMAGE_NAME:-}
+      IMAGE_NAME: ${IMAGE_NAME:-local/spark-uc:latest}
       GIT_TOKEN_FILE: /run/secrets/git_token
       GIT_REPO: ${GIT_REPO:-}
       GIT_BRANCH: main
@@ -17,12 +17,25 @@ services:
       DOCKERFILE: Dockerfile
       PROJECT_DIR: /workspace
       POETRY_GROUPS: dev
+
+      # --- UC-like Spark config ---
+      UC_CATALOG: local           # top-level catalog name
+      UC_SCHEMA: dev              # default schema
+      UC_WAREHOUSE: /workspace/warehouse  # warehouse path inside container
+      SPARK_BOOTSTRAP_UC: "true"  # run bootstrap-uc.sh on start
+      UC_DRY_RUN: "false"         # set to "true" to preview bootstrap SQL only
+
     secrets:
       - git_token
+
     volumes:
       - workspace:/workspace
+      - warehouse:/workspace/warehouse   # persistent UC warehouse/metastore
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./entrypoint.sh:/usr/local/bin/entrypoint.sh:ro
       - ./secure-clone.sh:/usr/local/bin/secure-clone.sh:ro
+
+    privileged: true
     tty: true
     stdin_open: true
     restart: always
@@ -33,3 +46,4 @@ secrets:
 
 volumes:
   workspace:
+  warehouse:
